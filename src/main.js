@@ -13,6 +13,8 @@ import { DamageSystem } from './combat/DamageSystem.js';
 import { TrainingDummy } from './combat/TrainingDummy.js';
 import { TestRoom } from './level/TestRoom.js';
 import { CheckpointSystem } from './level/Checkpoint.js';
+import { BossEncounter } from './level/BossEncounter.js';
+import { BossBar } from './ui/BossBar.js';
 import { VoidSequence } from './narrative/VoidSequence.js';
 import { HUD } from './ui/HUD.js';
 import { DebugSystem } from './debug/DebugSystem.js';
@@ -86,8 +88,15 @@ async function main() {
   ];
   for (const d of dummies) d.register(hitboxes, lockOn);
 
+  boot.step(80, 'the pool');
+  const encounter = engine.provide('encounter', new BossEncounter(engine, {
+    center: new THREE.Vector3(0, 0, -62),
+    radius: 15,
+  }));
+
   const checkpoints = engine.provide('checkpoints', new CheckpointSystem(engine, player));
   checkpoints.add({ id: 'testroom', position: new THREE.Vector3(-3.5, 0, 7), facing: Math.PI });
+  checkpoints.add({ id: 'poolEdge', position: new THREE.Vector3(0, 0, -44), facing: Math.PI });
   state.addCurrency(340); // something to lose, so the bloodstain loop is testable
 
   const hud = new HUD(engine, player);
@@ -117,8 +126,10 @@ async function main() {
   engine.add(damage, STAGE.COMBAT + 20);
   engine.add(physics, STAGE.PHYSICS);
   engine.add(cameraRig, STAGE.CAMERA);
+  engine.add(encounter, STAGE.AI + 10);
   engine.add(checkpoints, STAGE.WORLD);
   engine.add(hud, STAGE.UI);
+  engine.add(new BossBar(engine), STAGE.UI);
   engine.add(new StatsOverlay(engine, debug), STAGE.DEBUG);
   engine.add(new StateInspector(engine, debug, player, lockOn), STAGE.DEBUG);
   engine.add(new GamepadOverlay(engine, debug, input, player), STAGE.DEBUG);
@@ -130,6 +141,7 @@ async function main() {
     if (e.key === '0') TUNING.debug.invulnerable = !TUNING.debug.invulnerable;
     if (e.key === '-') player.vitals.applyDamage(9999, 0, 'debug') && player.die();
     if (e.key === '=') player.refillFlask();
+    if (e.key === '9') encounter.forceStart();
   });
 
   if (TUNING.debug.startZone === 'testroom') {
@@ -150,7 +162,8 @@ async function main() {
   engine.start();
   window.__VESSEL_READY = true;
   window.__VESSEL_API = {
-    engine, player, intro, lockOn, cameraRig, checkpoints, dummies, hitboxes, damage, state, STATE,
+    engine, player, intro, lockOn, cameraRig, checkpoints, dummies, hitboxes, damage, state,
+    encounter, boss: encounter.boss, arena: encounter.arena, STATE,
   };
 }
 

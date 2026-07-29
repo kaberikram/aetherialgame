@@ -28,6 +28,13 @@ export const FILTERS = {
   enemy: filter(GROUP.ENEMY, GROUP.WORLD | GROUP.PLAYER | GROUP.HITBOX),
   // Camera sweeps see world only. Never the player, never enemies, never triggers.
   camera: filter(GROUP.CAMERA_BLOCKER, GROUP.CAMERA_BLOCKER | GROUP.WORLD),
+  /**
+   * Invisible containment: stops the player leaving an arena but is ignored by
+   * the camera. Without this the camera collides with a wall the player cannot
+   * even see and shoves itself into the back of their head at the exact moment
+   * the boss is doing something worth looking at.
+   */
+  containment: filter(GROUP.WORLD, GROUP.PLAYER | GROUP.ENEMY),
   trigger: filter(GROUP.TRIGGER, GROUP.PLAYER),
   hitbox: filter(GROUP.HITBOX, GROUP.PLAYER | GROUP.ENEMY),
 };

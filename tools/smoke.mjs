@@ -86,6 +86,23 @@ const DRIVE_SCRIPTS = {
     await hold(page, ['KeyD'], 900);               // strafe
     await page.keyboard.press('Tab');
   },
+  boss: async (page) => {
+    await page.evaluate(() => window.__VESSEL_API.intro.skip());
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Digit9');   // warp to the pool and open the gate
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Tab');      // lock on
+    await hold(page, ['KeyW'], 900);
+    for (let i = 0; i < 6; i++) {
+      await page.mouse.down({ button: 'left' });
+      await page.mouse.up({ button: 'left' });
+      await page.waitForTimeout(400);
+    }
+    await page.keyboard.press('Space');    // roll
+    await page.waitForTimeout(1200);
+    await hold(page, ['KeyA'], 1500);      // circle
+    await page.waitForTimeout(2500);
+  },
   combat: async (page) => {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(400);

@@ -73,3 +73,33 @@ A press that begins and ends between two sampled steps used to be lost entirely,
 
 ### D18. Poise regenerates on a delay; hyper-armor suppresses poise damage only
 Light strings exist to break poise; heavies exist to trade. Hyper-armor during a heavy's wind-up absorbs *poise* damage but not health damage, so committing to a heavy means you finish the swing and you still bleed for it. A staggered target holds poise at zero for the whole stagger, so a break is a real opening rather than a flinch.
+
+---
+
+## P3 — The boss, grey box
+
+### D19. The boss runs on the player's frame-data schema
+`ai/data/bossMoves.js` uses the same `startup / active / recovery` shape, the same `HitboxSystem`, and the same `Vitals` as the player. "Readable and fair" is therefore structural rather than a promise: recovery is a real punish window measured in the same units the player's is.
+
+### D20. Attacks stop tracking at `trackUntil`
+Every move declares the frame after which it no longer turns toward the player. Without that, dodging a homing attack is a coin flip rather than a read, and the entire dodge-timing skill the genre is built on evaporates.
+
+### D21. Wind-ups differ in silhouette, not detail
+Each attack loads a different set of limbs and puts the mask at a different height — lunge high and coiled, sweep low and turned, slam with both arms straight overhead, skitter tipped onto one side. The rubric asks whether a paused wind-up is nameable; that is only achievable if the poses differ at silhouette scale, so the clips are authored against that constraint rather than against realism.
+
+The delayed strike is deliberately identical to the lunge for its first 20 frames. It is fair because the hold that follows is 22 frames of genuine stillness (authored as two identical keys, so it does not drift), which is ample time to see it and stop.
+
+### D22. The arena is a mechanic, expressed only in geometry
+Depth rises from a shallow rim to a deep centre, and `TUNING.water` makes depth cost movement speed and dodge distance. Safety versus reach becomes a standing decision with no UI and no tutorial. The profile is a plateau then a bowl rather than a smooth cone, so "am I in the deep part" is something the player can feel rather than estimate.
+
+### D23. Containment walls are not camera blockers
+A new `FILTERS.containment` group stops the player leaving an arena while being invisible to camera sweeps. Sharing one group meant the camera collided with a wall the player could not see and shoved itself into the back of their head at exactly the moment the boss was doing something worth looking at.
+
+### D24. Tall targets raise the pivot; they do not pitch the camera down
+Framing a 2.4m creature at 3m range by pitching down and looking up drives the camera into the floor. Instead the lock-on pivot lifts toward the target's lock point and pitch is clamped to stay at or above the pivot. A hard floor guard backs it up, because a camera under the ground plane produces a black frame — worse than any framing compromise.
+
+### D25. The camera is confined to the arena circle
+`CameraRig.bounds` keeps the camera inside the dais rather than letting it drift behind the dais rim stonework. Solved analytically against the circle rather than with a collider ring, because a collider ring would also stop the camera backing off from a large target — and backing off is exactly what a large target needs.
+
+### D26. Boss hitboxes sized by measurement, not by eye
+The first pass opened hitboxes correctly and still never touched the player: the closest approach across a full attack was 1.18m of clear air. Limb capsules were widened (0.4→0.85 on the femur, body 1.15→1.75), the lunge's travel extended from 5.4m to 8.6m, and engagement bands pulled in to match actual reach. Verified by instrumenting the fixed step and recording the minimum capsule gap across every active frame.

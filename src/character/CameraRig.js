@@ -48,6 +48,15 @@ export class CameraRig {
     // parked elsewhere in the world and yanks the camera into the character.
     this.collisionEnabled = true;
     this.lockTarget = null;
+    this.lockPivotLift = 0;
+    /**
+     * Optional arena confinement: { center: Vector3, radius: number }.
+     * A boss arena is ringed by stonework the camera must not sit behind. A
+     * collider ring would work but would also stop the camera backing off from
+     * a large target, so instead the camera is simply kept inside the circle
+     * and gives up distance at the rim — which is the trade you want anyway.
+     */
+    this.bounds = null;
 
     this.bus.on(EVENTS.LOCKON_CHANGED, ({ target }) => {
       this.lockTarget = target;
@@ -135,12 +144,19 @@ export class CameraRig {
     while (delta < -Math.PI) delta += Math.PI * 2;
     this.yaw += delta * Math.min(1, c.lockedSmoothing * dt);
 
-    // Pitch opens up as the target gets closer, so a big enemy standing over
-    // you stays in frame instead of leaving through the top of the screen.
+    // A tall enemy at close range must not be framed by pitching the camera
+    // down and looking up — that drives the camera into the floor. Instead the
+    // PIVOT rises toward the target's lock point, so the camera stays level
+    // and the framing opens upward. Pitch is clamped to stay at or above the
+    // pivot for the same reason.
     const heightDelta = (this.lockTarget.position.y + (this.lockTarget.lockHeight ?? 1.0)) - (p.position.y + c.height);
+    const closeness = 1 - THREE.MathUtils.clamp((flatDist - 2.0) / 7.0, 0, 1);
+    const wantLift = THREE.MathUtils.clamp(heightDelta, 0, 3.2) * (0.35 + closeness * 0.5);
+    this.lockPivotLift = THREE.MathUtils.damp(this.lockPivotLift, wantLift, 6.0, dt);
+
     const wantPitch = THREE.MathUtils.clamp(
-      -Math.atan2(heightDelta, Math.max(1.5, flatDist)) - TUNING.lockOn.screenBiasY,
-      c.pitchMin,
+      -Math.atan2(heightDelta - this.lockPivotLift, Math.max(2.6, flatDist)) - TUNING.lockOn.screenBiasY,
+      -0.12,
       c.pitchMax * 0.7
     );
     this.pitch += (wantPitch - this.pitch) * Math.min(1, c.lockedSmoothing * 0.7 * dt);
@@ -158,7 +174,8 @@ export class CameraRig {
     const p = this.player;
 
     _pivot.copy(p.position);
-    _pivot.y += c.height;
+    _pivot.y += c.height + (this.lockTarget ? this.lockPivotLift : 0);
+    if (!this.lockTarget) this.lockPivotLift = THREE.MathUtils.damp(this.lockPivotLift, 0, 6, dt);
     // The shoulder offset gives the character somewhere to be other than the
     // exact centre of the screen, which is what makes the framing read as
     // over-the-shoulder rather than as a tripod.
@@ -174,7 +191,9 @@ export class CameraRig {
     );
     _desired.copy(this.smoothPivot).addScaledVector(_dir, this.distance);
 
-    const target = this.#resolveCollision(this.smoothPivot, _dir, this.distance);
+    let limit = this.distance;
+    if (this.bounds) limit = Math.min(limit, this.#distanceToBounds(this.smoothPivot, _dir));
+    const target = this.#resolveCollision(this.smoothPivot, _dir, limit);
     // Pull in fast, push out slow. Corners stop popping.
     const rate = target < this.currentDistance ? c.collisionPullInSpeed : c.collisionPushOutSpeed;
     this.currentDistance = THREE.MathUtils.damp(this.currentDistance, target, rate, dt);
@@ -187,6 +206,12 @@ export class CameraRig {
       _desired.z += (Math.random() - 0.5) * s;
       this.shake = Math.max(0, this.shake - this.shakeDecay * dt);
     }
+
+    // Last-resort floor guard. Collision sweeps handle walls, but a camera
+    // that ends up under the ground plane produces a black frame, which is
+    // worse than any framing compromise.
+    const minY = p.position.y + 0.45;
+    if (_desired.y < minY) _desired.y = minY;
 
     this.camera.position.copy(_desired);
 
@@ -211,6 +236,27 @@ export class CameraRig {
    * ray squeezes the camera through railings and thin pillars and then the
    * near plane clips into them.
    */
+  /**
+   * How far along `dir` the camera can travel before leaving the arena circle.
+   * Solves |pivot + t·dir − centre|² = r² for the positive root, in the
+   * horizontal plane only — vertical is handled by the collision sweep.
+   */
+  #distanceToBounds(pivot, dir) {
+    const { center, radius } = this.bounds;
+    const ox = pivot.x - center.x;
+    const oz = pivot.z - center.z;
+    const dx = dir.x;
+    const dz = dir.z;
+    const a = dx * dx + dz * dz;
+    if (a < 1e-6) return Infinity;
+    const b = 2 * (ox * dx + oz * dz);
+    const c = ox * ox + oz * oz - radius * radius;
+    const disc = b * b - 4 * a * c;
+    if (disc <= 0) return TUNING.camera.minCollisionDistance; // pivot already outside
+    const t = (-b + Math.sqrt(disc)) / (2 * a);
+    return Math.max(TUNING.camera.minCollisionDistance, t);
+  }
+
   #resolveCollision(pivot, dir, maxDistance) {
     const c = TUNING.camera;
     if (!this.collisionEnabled) return maxDistance;
