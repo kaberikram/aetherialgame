@@ -17,6 +17,7 @@ import { CheckpointSystem } from './level/Checkpoint.js';
 import { BossEncounter } from './level/BossEncounter.js';
 import { BossBar } from './ui/BossBar.js';
 import { VoidSequence } from './narrative/VoidSequence.js';
+import { Pigeon } from './companion/Pigeon.js';
 import { HUD } from './ui/HUD.js';
 import { DebugSystem } from './debug/DebugSystem.js';
 import { StatsOverlay } from './debug/StatsOverlay.js';
@@ -107,6 +108,16 @@ async function main() {
   zones.register('pagodaWell', bounds(-40, -34, -150, 40, 40, -98));
   zones.snapTo('void');
 
+  boot.step(82, 'the companion');
+  const pigeon = engine.provide('pigeon', new Pigeon(engine, { player, chapter }));
+  pigeon.setPath([
+    WAYPOINTS.embodiment, WAYPOINTS.descentTop, WAYPOINTS.descentBottom,
+    WAYPOINTS.greenVein, WAYPOINTS.sword, WAYPOINTS.poolApproach,
+    WAYPOINTS.starChamber, WAYPOINTS.pagodaGate, WAYPOINTS.pagodaFloor,
+  ]);
+  // Tell #2 needs to know where the star's light pools.
+  pigeon.setStarRepulsor(encounter.arena.starGroup.position);
+
   const hud = new HUD(engine, player);
 
   // Damage lands on the player through events, so the controller never needs a
@@ -134,6 +145,7 @@ async function main() {
   engine.add(damage, STAGE.COMBAT + 20);
   engine.add(physics, STAGE.PHYSICS);
   engine.add(cameraRig, STAGE.CAMERA);
+  engine.add(pigeon, STAGE.AI + 5);
   engine.add(chapter, STAGE.WORLD - 10);
   engine.add(zones, STAGE.WORLD - 5);
   engine.add(encounter, STAGE.AI + 10);
@@ -187,7 +199,7 @@ async function main() {
   window.__VESSEL_READY = true;
   window.__VESSEL_API = {
     engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
-    encounter, boss: encounter.boss, arena: encounter.arena, alignment, STATE,
+    encounter, boss: encounter.boss, arena: encounter.arena, alignment, pigeon, STATE,
   };
 }
 

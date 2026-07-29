@@ -103,3 +103,36 @@ Framing a 2.4m creature at 3m range by pitching down and looking up drives the c
 
 ### D26. Boss hitboxes sized by measurement, not by eye
 The first pass opened hitboxes correctly and still never touched the player: the closest approach across a full attack was 1.18m of clear air. Limb capsules were widened (0.4→0.85 on the femur, body 1.15→1.75), the lunge's travel extended from 5.4m to 8.6m, and engagement bands pulled in to match actual reach. Verified by instrumenting the fixed step and recording the minimum capsule gap across every active frame.
+
+---
+
+## P5 — Alignment and flight
+
+### D27. Seven slots registered, one populated
+`Alignment` holds a registry of all seven slots with their attach bones; six have `null` variant factories. That is a normal state, not an error — the assembly path skips them. Populating `head` later is one registry entry and zero changes anywhere else, which is the entire point of building the architecture before it is needed.
+
+### D28. The choice is a movement, not a menu
+Two forms rise from the water and the player walks into one. No prompt, no cursor, no confirm step, no labels. The forms brighten as the player nears them, so approach reads as intent before the commitment lands, and the only description the game ever offers is the shape itself — a fan of hard primaries versus a membrane on splayed fingers.
+
+### D29. The chamber reaction changes the star, not a tint
+Light drives the star from 46 to 80 and the ambient scale to 2.06×; dark drives the star to 11 and the ambient to 0.37×. Because it is the light's actual output, every shadow in the chamber moves. A colour grade would have been cheaper and would have failed the "same room, two rooms" line.
+
+`ZoneManager.reactionScale` is a separate multiplier on top of the zone profile rather than an overwrite, so the chamber keeps its own identity through the change.
+
+### D30. Flight heading follows the camera
+PHASES.md asks for an exit that is "a triumph rather than a fight with the camera", so flight is deliberately not a free six-axis controller. Heading comes from the camera, the player controls throttle and climb, and banking is a consequence of turning rather than an input. That leaves one thing to be good at — altitude against a stamina cost — which is enough for one ascent and not enough to be fiddly.
+
+---
+
+## P6 — The companion
+
+### D31. The three tells are structural, never dialogue
+1. **The shadow.** A knight silhouette — helm, pauldrons, a long blade held point-down — is parented under the bird on render layer 1. The main camera has layer 1 disabled, so it is invisible; shadow-map rendering ignores the camera's layer mask, so it still casts. The bird's own body has `castShadow = false`. The shadow on the floor is a person's, and it is holding a sword.
+2. **The star.** A hard repulsor around the star's pool of illumination, strong enough that the bird visibly takes the long way round rather than crossing it.
+3. **The sword.** On pickup it recoils hard and its line is cut off mid-word.
+
+### D32. Positional flaps, non-positional voice
+`PROJECT.md` calls the mismatch deliberate, so the wing-flap SFX carries a position and the speech does not. It is the fourth tell, and the one most likely to be felt rather than noticed.
+
+### D33. Companion pathing scans rather than increments
+The first version advanced a waypoint index forward only, which left the bird stranded at the start of the chapter after any warp, death respawn, or backtrack. It now finds the waypoint nearest the player each step and leads from the next one.

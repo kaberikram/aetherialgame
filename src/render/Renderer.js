@@ -50,6 +50,10 @@ export class Renderer {
     );
     this.camera.position.set(0, 3, 8);
     this.camera.lookAt(0, 1, 0);
+    // Layer 1 is "shadow-caster only": objects on it are rendered into shadow
+    // maps but never by the main camera. The pigeon's knight silhouette lives
+    // there, which is how its shadow can be the wrong shape.
+    this.camera.layers.disable(1);
 
     /** Post chain plugs in here. When null, we draw straight to the canvas. */
     this.composer = null;
