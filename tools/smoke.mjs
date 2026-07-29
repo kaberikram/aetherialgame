@@ -14,7 +14,7 @@
  *   node tools/smoke.mjs --shot name           # capture captures/name.png
  */
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -35,7 +35,17 @@ const arg = (name, fallback = null) => {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : (i >= 0 ? true : fallback);
 };
 
+/** A previous run that was killed mid-flight can leave the port held. */
+function freePort() {
+  try {
+    execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`, { stdio: 'ignore' });
+  } catch {
+    /* nothing was listening */
+  }
+}
+
 function startServer() {
+  freePort();
   const proc = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -54,27 +64,44 @@ function startServer() {
   });
 }
 
+const hold = async (page, keys, ms) => {
+  for (const k of keys) await page.keyboard.down(k);
+  await page.waitForTimeout(ms);
+  for (const k of keys) await page.keyboard.up(k);
+};
+
 const DRIVE_SCRIPTS = {
   idle: async () => {},
+  /** Skip the intro, then exercise every movement state. */
   walk: async (page) => {
-    for (const key of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) {
-      await page.keyboard.down(key);
-      await page.waitForTimeout(700);
-      await page.keyboard.up(key);
-    }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+    for (const key of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) await hold(page, [key], 650);
+    await hold(page, ['KeyW', 'ShiftLeft'], 1100); // sprint
+    await page.keyboard.press('Space');            // roll
+    await page.waitForTimeout(1000);
+    await page.keyboard.press('KeyF');             // jump
+    await page.waitForTimeout(900);
+    await page.keyboard.press('Tab');              // lock on
+    await hold(page, ['KeyD'], 900);               // strafe
+    await page.keyboard.press('Tab');
   },
   combat: async (page) => {
-    await page.mouse.click(640, 400);
-    await page.waitForTimeout(300);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+    await hold(page, ['KeyW'], 900);
+    await page.keyboard.press('Tab');
     for (let i = 0; i < 4; i++) {
       await page.mouse.down({ button: 'left' });
       await page.mouse.up({ button: 'left' });
-      await page.waitForTimeout(450);
+      await page.waitForTimeout(420);
     }
-    await page.keyboard.press('Space');
-    await page.waitForTimeout(400);
-    await page.keyboard.press('ShiftLeft');
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.up({ button: 'right' });
     await page.waitForTimeout(900);
+    await hold(page, ['KeyQ'], 700);               // guard
+    await page.keyboard.press('KeyR');             // flask
+    await page.waitForTimeout(1300);
   },
 };
 
@@ -198,6 +225,10 @@ async function main() {
   } finally {
     await browser.close();
     server.kill('SIGTERM');
+    // vite spawns children; SIGTERM on the wrapper does not always reach them,
+    // and a held port breaks the next run.
+    await new Promise((r) => setTimeout(r, 300));
+    freePort();
   }
   process.exit(exitCode);
 }
