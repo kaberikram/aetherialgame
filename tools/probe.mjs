@@ -53,8 +53,28 @@ try {
   await page.waitForFunction(() => window.__VESSEL_READY === true, { timeout: 45000 });
   await page.click('canvas').catch(() => {});
 
+  // Skip the intro programmatically. Pressing Escape also exits pointer lock,
+  // and Chrome then rate-limits re-locking, which makes subsequent mouse input
+  // intermittent — a harness problem that looks exactly like a game bug.
+  if (flag('skipIntro')) {
+    await page.evaluate(() => window.__VESSEL_API.intro.skip());
+    await page.waitForTimeout(250);
+  }
+
   const wait = Number(flag('wait', 2));
   await page.waitForTimeout(wait * 1000);
+
+  // Instrumentation installed BEFORE the drive, so transient state (a hitbox
+  // that is open for six frames) can be recorded rather than sampled once.
+  const pre = flag('pre');
+  if (pre && pre !== true) {
+    await page.evaluate((src) => {
+      const api = window.__VESSEL_API;
+      const engine = window.__VESSEL;
+      // eslint-disable-next-line no-eval
+      eval(src);
+    }, String(pre));
+  }
 
   const keys = flag('keys');
   if (keys && keys !== true) {
@@ -63,6 +83,22 @@ try {
       await page.keyboard.down(key);
       await page.waitForTimeout(Number(ms ?? 500));
       await page.keyboard.up(key);
+    }
+  }
+
+  // Mouse buttons drive light (left) and heavy (right) attacks.
+  // "left:3@450" = three left clicks, 450ms apart.
+  const clicks = flag('clicks');
+  if (clicks && clicks !== true) {
+    for (const spec of String(clicks).split(',')) {
+      const [btn, rest] = spec.split(':');
+      const [count, gap] = (rest ?? '1').split('@');
+      for (let i = 0; i < Number(count); i++) {
+        await page.mouse.down({ button: btn });
+        await page.waitForTimeout(30);
+        await page.mouse.up({ button: btn });
+        await page.waitForTimeout(Number(gap ?? 400));
+      }
     }
   }
 

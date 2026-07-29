@@ -46,3 +46,30 @@ The rubric makes the board authoritative ("does the frame match its concept boar
 
 ### D11. Keyboard/mouse tuned separately, not derived from the gamepad
 `CONTROLS.md` is gamepad-first and correct to be. But a keyboard has no analog magnitude and no trigger velocity, so deriving its feel by rescaling gamepad curves produces a scheme that is bad in a specific, hard-to-diagnose way. Two independent tuning profiles under `TUNING.input`. Practically: the build must be judgeable in a browser with nothing plugged in.
+
+---
+
+## P2 — Combat framework
+
+### D12. Frame data and animation share one source
+A move's `startup / active / recovery` in `combat/data/playerMoves.js` uses the same frame numbers as the keys in `character/clips/attacks.js`. The hitbox opens on the frame the pose says the blade is out because there is exactly one number, not two that have to be kept in agreement. Any other arrangement drifts the first time someone retimes a swing.
+
+### D13. Buffering during recovery only, never during active frames
+`InputBuffer` holds one queued action for ~266ms, and `PlayerController` only ever pushes to it from `#inRecovery()`. Buffering during active frames would let the player retroactively take back a committed swing, which is precisely the thing `PROJECT.md` says must not be possible.
+
+Chaining is deliberately *not* implemented as cancelling. A queued chain input is remembered and the next move starts when the current move's `chainWindow` opens inside recovery — so a string is a decision made after seeing the swing land.
+
+### D14. Hitboxes are fatter than the blade
+`SWORD_HITBOX` has a 0.25m radius against a 0.05m-thick blade mesh. A hitbox that matches the geometry whiffs on swings the player watched connect, and that reads as the game cheating. Measured with `tools/probe.mjs`: the tuned swing clears the target hurtbox by ~0.12m rather than the 0.05m the exact-fit version managed, which is the difference between reliable and intermittent.
+
+### D15. Arm poses must stay below horizontal during active frames
+The blade runs along the hand bone's local −Y, the same axis the arm hangs along, so the only thing that puts the blade in front of the character is raising the upper arm. Past −90° on `upperArm.x` the arm points *upward* and the blade sails over everything at head height. Every active frame in `attacks.js` keeps that value between roughly −44° and −78°. This was found by measurement, not by eye: the first pass looked like a correct swing and connected with nothing.
+
+### D16. Input edge detection survives dropped frames
+A press that begins and ends between two sampled steps used to be lost entirely, because `pressed` was derived only from `held && !wasHeld`. On a frame hitch that silently eats a click. `InputSystem` now also treats a key or button recorded in the current step's fresh-press set as a press. Found because the headless harness runs at ~10fps under software GL, which turned a rare real-world bug into a constant one.
+
+### D17. Hit stop as a time scale, not a freeze
+`DamageSystem.timeScale` drops to 0.06 for 5–8 frames on contact and the player controller multiplies its animation and frame counters by it. Physics still steps normally so nothing tunnels. This is the cheapest large win in the whole combat system — it is most of what makes a sword feel like it has mass.
+
+### D18. Poise regenerates on a delay; hyper-armor suppresses poise damage only
+Light strings exist to break poise; heavies exist to trade. Hyper-armor during a heavy's wind-up absorbs *poise* damage but not health damage, so committing to a heavy means you finish the swing and you still bleed for it. A staggered target holds poise at zero for the whole stagger, so a break is a real opening rather than a flinch.

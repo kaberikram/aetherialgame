@@ -319,9 +319,14 @@ export class InputSystem {
       }
 
       const wasHeld = s.held;
+      const fresh = freshKey(bind.keys)
+        || (bind.mouse?.some((b) => this.#mousePressedThisStep.has(b)) ?? false);
       s.value = held ? 1 : 0;
       s.held = held;
-      s.pressed = held && !wasHeld;
+      // A press that began AND ended between two sampled steps is still a
+      // press. Without the `fresh` term, a fast click during a frame hitch is
+      // silently dropped — which reads to the player as the game ignoring them.
+      s.pressed = (held && !wasHeld) || (fresh && !wasHeld);
       s.released = !held && wasHeld;
     }
   }
