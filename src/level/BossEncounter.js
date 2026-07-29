@@ -3,6 +3,7 @@ import { EVENTS } from '../core/EventBus.js';
 import { StarChamberArena } from './StarChamberArena.js';
 import { FogGate } from './FogGate.js';
 import { BossController } from '../ai/BossController.js';
+import { WingChoice } from '../narrative/WingChoice.js';
 
 /**
  * BossEncounter — ties the arena, the gate, the boss and the retry loop
@@ -38,6 +39,8 @@ export class BossEncounter {
     });
 
     this.active = false;
+    this.wingChoice = null;
+    this.choiceDelay = 0;
 
     this.bus.on(EVENTS.PLAYER_DIED, () => this.#onPlayerDied());
     this.bus.on(EVENTS.BOSS_DEFEATED, () => this.#onBossDefeated());
@@ -75,6 +78,25 @@ export class BossEncounter {
     this.gate.dissolve();
     this.engine.resolve('state').addCurrency(1200);
     this.engine.resolve('state').setFlag('bossDefeated');
+    // A pause before the wings. The player has just won and needs a beat to
+    // register it before the chapter asks them for anything.
+    this.choiceDelay = 5.0;
+  }
+
+  /** Beat 7. Built lazily so the alignment system is guaranteed to exist. */
+  #beginWingChoice() {
+    if (this.wingChoice) return;
+    this.wingChoice = new WingChoice(this.engine, {
+      arena: this.arena,
+      player: this.player,
+      alignment: this.player.alignment,
+    });
+    this.wingChoice.onResolved = (variant) => {
+      this.player.flight?.unlock();
+      this.engine.resolve('state').setFlag('wingsResolved');
+      this.onWingsResolved?.(variant);
+    };
+    this.wingChoice.begin();
   }
 
   fixedUpdate(dt) {
@@ -82,11 +104,26 @@ export class BossEncounter {
     // distance. This is the line that makes the arena a mechanic.
     this.arena.applyWaterTo(this.player);
     this.boss.fixedUpdate(dt);
+
+    if (this.choiceDelay > 0) {
+      this.choiceDelay -= dt;
+      if (this.choiceDelay <= 0) this.#beginWingChoice();
+    }
+    this.wingChoice?.fixedUpdate(dt);
   }
 
   update(dt) {
     this.arena.update(dt);
     this.gate.update(dt);
+  }
+
+  /** Debug: skip straight to the wing choice. */
+  forceWingChoice() {
+    this.player.respawn(this.center.clone().setY(this.center.y + 0.4), Math.PI);
+    this.boss.alive = false;
+    this.boss.state = 'dead';
+    this.boss.mesh.visible = false;
+    this.#beginWingChoice();
   }
 
   /** Debug: warp to the pool's edge and start the fight. */
@@ -99,6 +136,7 @@ export class BossEncounter {
   }
 
   dispose() {
+    this.wingChoice?.dispose();
     this.boss.dispose();
     this.gate.dispose();
     this.arena.dispose();

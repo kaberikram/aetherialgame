@@ -74,6 +74,13 @@ export class ZoneManager {
     this.ambient = new THREE.HemisphereLight(0x202020, 0x000000, 0);
     this.scene.add(this.ambient);
 
+    /**
+     * Multiplier applied on top of the zone's ambient. The wing choice drives
+     * this: light raises the chamber's illumination, dark deepens it. Kept
+     * separate from the profile so the zone's own identity is not overwritten.
+     */
+    this.reactionScale = 1;
+
     this.target = { ...ZONE_PROFILES.void };
     this.fogColor = new THREE.Color(0x000000);
     this.bgColor = new THREE.Color(0x000000);
@@ -123,7 +130,7 @@ export class ZoneManager {
     }
     this.ambient.color.copy(this.skyColor);
     this.ambient.groundColor.copy(this.groundColor);
-    this.ambient.intensity = this.ambientIntensity;
+    this.ambient.intensity = this.ambientIntensity * this.reactionScale;
   }
 
   #contains(bounds, p) {

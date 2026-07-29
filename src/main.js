@@ -75,6 +75,7 @@ async function main() {
   const hitboxes = engine.provide('hitboxes', new HitboxSystem(engine));
   const damage = engine.provide('damage', new DamageSystem(engine));
   player.attachCombat({ hitboxes, damage, lockOn });
+  const alignment = engine.provide('alignment', player.attachAlignment());
   // No weapon at the start. It is found in the mud beside a dead warrior at
   // beat 5, and combat is genuinely unavailable until then.
 
@@ -151,6 +152,7 @@ async function main() {
     if (e.key === '-') player.vitals.applyDamage(9999, 0, 'debug') && player.die();
     if (e.key === '=') player.refillFlask();
     if (e.key === '9') encounter.forceStart();
+    if (e.key === '8') encounter.forceWingChoice();
     // Debug zone warps. Each carries a facing, because arriving pointed at a
     // wall makes a zone look broken when it is only badly oriented.
     const warps = {
@@ -185,7 +187,7 @@ async function main() {
   window.__VESSEL_READY = true;
   window.__VESSEL_API = {
     engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
-    encounter, boss: encounter.boss, arena: encounter.arena, STATE,
+    encounter, boss: encounter.boss, arena: encounter.arena, alignment, STATE,
   };
 }
 

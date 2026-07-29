@@ -13,6 +13,8 @@ import { Vitals } from '../combat/Vitals.js';
 import { BoundCapsule, StaticCapsule } from '../combat/HitboxSystem.js';
 import { PLAYER_MOVES, OPENERS, getMove } from '../combat/data/playerMoves.js';
 import { buildSword } from './Weapon.js';
+import { Alignment } from './Alignment.js';
+import { Flight } from './Flight.js';
 
 export const STATE = Object.freeze({
   DRIFT: 'drift',         // beat 1: a formless light, weightless, no collision
@@ -163,6 +165,14 @@ export class PlayerController {
     hitboxes.registerHurtbox(this, this.hurtbox);
   }
 
+  /** Wired after construction; needs GameState, which needs the engine. */
+  attachAlignment() {
+    this.alignment = new Alignment(this.engine, this);
+    this.flight = new Flight(this.engine, this, this.alignment);
+    this.alignment.assemble();
+    return this.alignment;
+  }
+
   giveWeapon() {
     this.hasWeapon = true;
     this.sword.visible = true;
@@ -255,6 +265,23 @@ export class PlayerController {
       return;
     }
 
+    // Flight replaces ground motion entirely when it is active. It is checked
+    // before intent so a takeoff cannot be interleaved with a ground action.
+    const flying = this.flight?.fixedUpdate(adt) ?? false;
+    if (flying) {
+      if (this.state !== STATE.FLIGHT) {
+        this.setState(STATE.FLIGHT, { force: true });
+        this.anim.play('fall', { fadeFrames: 6 });
+      }
+      this.#integrate(adt);
+      this.anim.fixedUpdate(adt);
+      this.alignment?.update(adt, { flying: true, flapPhase: this.flight.flapPhase });
+      this.flight.applyPose(this.root);
+      this.hurtbox.update();
+      return;
+    }
+    if (this.state === STATE.FLIGHT) this.setState(this.grounded ? STATE.LAND : STATE.AIRBORNE, { force: true });
+
     this.#readIntent(ctx.frame);
     this.#updateGuard(dt);
     this.#updateFacing(dt);
@@ -262,6 +289,8 @@ export class PlayerController {
     this.anim.fixedUpdate(adt);
     this.#updateCombatFrames();
     this.#updateAnimationState();
+    this.alignment?.update(adt, { flying: false });
+    this.flight?.applyPose(this.root);
     this.hurtbox.update();
   }
 
@@ -363,6 +392,22 @@ export class PlayerController {
 
     const deep = this.waterDepth > TUNING.water.shallowDepth;
     const cost = TUNING.roll.staminaCost * (deep ? TUNING.water.staminaMultiplierDeep : 1);
+
+    // Dark's dash: when stamina is gone it will still go, and charge health for
+    // it. That is the branch's whole character — it can always keep pressing,
+    // and pressing is what kills it.
+    if (!this.stamina.canAct && this.alignment?.hasCostDash) {
+      const hp = TUNING.alignment.dark.dashHealthCost;
+      if (this.vitals.health > hp + 1) {
+        this.vitals.applyDamage(hp, 0, 'dash');
+        this.targetFacing = this.#cameraRelativeYaw(move);
+        this.facing = this.targetFacing;
+        this.setState(STATE.ROLL, { force: true });
+        this.anim.play('roll', { fadeFrames: 2 });
+        this.bus.emit(EVENTS.SFX, { id: 'darkDash', position: this.position });
+        return;
+      }
+    }
     if (!this.stamina.spend(cost, 'roll')) return;
 
     this.targetFacing = this.#cameraRelativeYaw(move);
@@ -735,6 +780,15 @@ export class PlayerController {
       this.velocity.y = -2;
     }
 
+    this.#integrate(dt, { resolveLanding: true });
+  }
+
+  /**
+   * Move the capsule by the current velocity and read back what the world
+   * allowed. Shared by walking and flying so there is exactly one place that
+   * writes to the physics body.
+   */
+  #integrate(dt, { resolveLanding = true } = {}) {
     _v.set(this.velocity.x * dt, this.velocity.y * dt, this.velocity.z * dt);
     this.controller.computeColliderMovement(this.collider, { x: _v.x, y: _v.y, z: _v.z });
     const corrected = this.controller.computedMovement();
@@ -752,7 +806,7 @@ export class PlayerController {
     if (Math.abs(corrected.x) < Math.abs(_v.x) * 0.5) this.velocity.x *= 0.2;
     if (Math.abs(corrected.z) < Math.abs(_v.z) * 0.5) this.velocity.z *= 0.2;
 
-    this.#resolveGroundTransitions(wasGrounded);
+    if (resolveLanding) this.#resolveGroundTransitions(wasGrounded);
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.facing;

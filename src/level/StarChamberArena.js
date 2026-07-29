@@ -189,6 +189,8 @@ export class StarChamberArena {
     this.starGroup = g;
     this.star = light;
     this.starCore = core;
+    this.baseStarIntensity = light.intensity;
+    this.starBase = light.intensity;
   }
 
   /** Displacement written by the boss breaching. */
@@ -237,8 +239,17 @@ export class StarChamberArena {
     // Star flicker: two slow beats, never random. Random reads as a fault.
     if (this.starCore) {
       const f = 1 + Math.sin(t * 0.9) * 0.05 + Math.sin(t * 2.3) * 0.03;
-      this.star.intensity = 46 * f;
-      this.starCore.scale.setScalar(f);
+      // The wing choice retargets the star's actual output, which moves every
+      // shadow in the chamber. That is what makes it a different room rather
+      // than the same room with a tint.
+      const target = this.star.userData.reactTarget ?? this.baseStarIntensity;
+      this.starBase = THREE.MathUtils.damp(this.starBase ?? this.baseStarIntensity, target, 0.9, dt);
+      this.star.intensity = this.starBase * f;
+      this.starCore.scale.setScalar(f * (0.6 + this.starBase / this.baseStarIntensity * 0.5));
+      const glowScale = 0.5 + (this.starBase / this.baseStarIntensity) * 0.7;
+      for (const c of this.starGroup.children) {
+        if (c.isSprite) c.material.opacity = c.scale.x > 4 ? 0.34 * glowScale : 0.95 * glowScale;
+      }
     }
   }
 
