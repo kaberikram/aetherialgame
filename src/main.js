@@ -11,7 +11,8 @@ import { LockOn } from './combat/LockOn.js';
 import { HitboxSystem } from './combat/HitboxSystem.js';
 import { DamageSystem } from './combat/DamageSystem.js';
 import { TrainingDummy } from './combat/TrainingDummy.js';
-import { TestRoom } from './level/TestRoom.js';
+import { Chapter1, WAYPOINTS } from './level/Chapter1.js';
+import { ZoneManager } from './level/ZoneManager.js';
 import { CheckpointSystem } from './level/Checkpoint.js';
 import { BossEncounter } from './level/BossEncounter.js';
 import { BossBar } from './ui/BossBar.js';
@@ -65,9 +66,6 @@ async function main() {
   boot.step(34, 'input');
   const input = engine.provide('input', new InputSystem(engine, renderer.renderer.domElement));
 
-  boot.step(48, 'world');
-  const room = new TestRoom(engine).build();
-
   boot.step(62, 'body');
   const player = engine.provide('player', new PlayerController(engine));
   const cameraRig = engine.provide('camera', new CameraRig(engine, player));
@@ -77,27 +75,36 @@ async function main() {
   const hitboxes = engine.provide('hitboxes', new HitboxSystem(engine));
   const damage = engine.provide('damage', new DamageSystem(engine));
   player.attachCombat({ hitboxes, damage, lockOn });
-  // Phase 2 is a combat proving ground, so the sword starts in hand. In the
-  // real chapter it is found in the mud beside a dead warrior at beat 5.
-  player.giveWeapon();
+  // No weapon at the start. It is found in the mud beside a dead warrior at
+  // beat 5, and combat is genuinely unavailable until then.
 
-  const dummies = [
-    new TrainingDummy(engine, new THREE.Vector3(0, 0, -3), { name: 'Training Dummy' }),
-    new TrainingDummy(engine, new THREE.Vector3(6.5, 0, -1), { name: 'Dummy B', maxPoise: 34 }),
-    new TrainingDummy(engine, new THREE.Vector3(-6.5, 0, -1), { name: 'Dummy C', maxPoise: 120 }),
-  ];
-  for (const d of dummies) d.register(hitboxes, lockOn);
+  // The chapter needs the player and combat services, so it is constructed
+  // after them and before the encounter that sits inside it.
+  boot.step(78, 'world');
+  const chapter = engine.provide('chapter', new Chapter1(engine)).build();
+
+  const dummies = [];
 
   boot.step(80, 'the pool');
   const encounter = engine.provide('encounter', new BossEncounter(engine, {
-    center: new THREE.Vector3(0, 0, -62),
+    center: WAYPOINTS.starChamber.clone(),
     radius: 15,
   }));
 
   const checkpoints = engine.provide('checkpoints', new CheckpointSystem(engine, player));
-  checkpoints.add({ id: 'testroom', position: new THREE.Vector3(-3.5, 0, 7), facing: Math.PI });
-  checkpoints.add({ id: 'poolEdge', position: new THREE.Vector3(0, 0, -44), facing: Math.PI });
-  state.addCurrency(340); // something to lose, so the bloodstain loop is testable
+  checkpoints.add({ id: 'descent', position: WAYPOINTS.descentBottom.clone().setY(-13.6), facing: Math.PI });
+  checkpoints.add({ id: 'greenVein', position: new THREE.Vector3(0, -18.9, -34), facing: Math.PI });
+  checkpoints.add({ id: 'poolEdge', position: WAYPOINTS.poolApproach.clone().setY(-22.2), facing: Math.PI });
+
+  const zones = engine.provide('zones', new ZoneManager(engine));
+  const bounds = (minX, minY, minZ, maxX, maxY, maxZ) => ({
+    min: new THREE.Vector3(minX, minY, minZ), max: new THREE.Vector3(maxX, maxY, maxZ),
+  });
+  zones.register('descent', bounds(-30, -20, 0, 30, 12, 46));
+  zones.register('greenVein', bounds(-30, -26, -52, 30, -6, 0));
+  zones.register('starChamber', bounds(-40, -34, -98, 40, -8, -52));
+  zones.register('pagodaWell', bounds(-40, -34, -150, 40, 40, -98));
+  zones.snapTo('void');
 
   const hud = new HUD(engine, player);
 
@@ -109,10 +116,11 @@ async function main() {
 
   boot.step(84, 'the void');
   const intro = new VoidSequence(engine, player, cameraRig).build();
-  intro.landingPosition = new THREE.Vector3(0, 0.05, 4);
+  intro.landingPosition = WAYPOINTS.embodiment.clone();
   intro.landingFacing = Math.PI;
   intro.onComplete = () => {
     cameraRig.snap({ yaw: intro.landingFacing + Math.PI });
+    zones.snapTo('descent');
     hud.setVisible(true);
   };
 
@@ -120,12 +128,13 @@ async function main() {
   engine.add(input, STAGE.INPUT);
   engine.add(intro, STAGE.NARRATIVE);
   engine.add(player, STAGE.CHARACTER);
-  for (const d of dummies) engine.add(d, STAGE.AI);
   engine.add(lockOn, STAGE.COMBAT);
   engine.add(hitboxes, STAGE.COMBAT + 10);
   engine.add(damage, STAGE.COMBAT + 20);
   engine.add(physics, STAGE.PHYSICS);
   engine.add(cameraRig, STAGE.CAMERA);
+  engine.add(chapter, STAGE.WORLD - 10);
+  engine.add(zones, STAGE.WORLD - 5);
   engine.add(encounter, STAGE.AI + 10);
   engine.add(checkpoints, STAGE.WORLD);
   engine.add(hud, STAGE.UI);
@@ -142,13 +151,26 @@ async function main() {
     if (e.key === '-') player.vitals.applyDamage(9999, 0, 'debug') && player.die();
     if (e.key === '=') player.refillFlask();
     if (e.key === '9') encounter.forceStart();
+    // Debug zone warps. Each carries a facing, because arriving pointed at a
+    // wall makes a zone look broken when it is only badly oriented.
+    const warps = {
+      1: ['embodiment', Math.PI], 2: ['descentBottom', Math.PI], 3: ['greenVein', Math.PI],
+      4: ['poolApproach', Math.PI], 5: ['pagodaFloor', -Math.PI / 2],
+    };
+    if (warps[e.key]) {
+      const [name, facing] = warps[e.key];
+      const wp = WAYPOINTS[name];
+      player.respawn(wp.clone().setY(wp.y + 0.5), facing);
+      cameraRig.snap({ yaw: facing + Math.PI });
+      intro.finished || intro.skip();
+    }
   });
 
-  if (TUNING.debug.startZone === 'testroom') {
+  if (TUNING.debug.startZone) {
     intro.skip();
   } else {
     hud.setVisible(false);
-    intro.start(room.group);
+    intro.start(chapter.group);
   }
 
   boot.step(94, 'first frame');
@@ -162,7 +184,7 @@ async function main() {
   engine.start();
   window.__VESSEL_READY = true;
   window.__VESSEL_API = {
-    engine, player, intro, lockOn, cameraRig, checkpoints, dummies, hitboxes, damage, state,
+    engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
     encounter, boss: encounter.boss, arena: encounter.arena, STATE,
   };
 }
