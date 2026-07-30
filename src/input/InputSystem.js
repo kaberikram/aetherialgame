@@ -66,6 +66,18 @@ export class InputSystem {
     this.move = new THREE.Vector2();      // camera-relative intent, deadzoned & curved
     this.moveRaw = new THREE.Vector2();    // pre-deadzone, for the debug overlay
     this.moveMagnitude = 0;
+    /**
+     * Camera intent, in the ONE convention this project uses:
+     *
+     *   look.x  positive = turn the view RIGHT
+     *   look.y  positive = tilt the view UP
+     *
+     * Stated because it was not, and the cost was that mouse-Y ran inverted
+     * while the config flag said `invertY: false`. Raw device axes do not use
+     * this convention — a mouse reports +Y when it moves down, a stick reports
+     * +Y when pushed down — so both are negated once, here, and never again
+     * downstream.
+     */
     this.look = new THREE.Vector2();
     this.walkModifier = false;
 
@@ -75,13 +87,50 @@ export class InputSystem {
     this.#keys = new Set();
     this.#mouseButtons = new Set();
     this.#mouseDelta = new THREE.Vector2();
+    this.#lookAccum = new THREE.Vector2();
     this.#keyPressedThisStep = new Set();
     this.#mousePressedThisStep = new Set();
 
     this.#bindDom();
   }
 
-  #keys; #mouseButtons; #mouseDelta; #keyPressedThisStep; #mousePressedThisStep;
+  #keys; #mouseButtons; #mouseDelta; #keyPressedThisStep; #mousePressedThisStep; #lookAccum;
+
+  /**
+   * Camera intent for ONE rendered frame, in the look convention above.
+   *
+   * The camera reads this in `update()` instead of reading `this.look` in
+   * `fixedUpdate()`. Everything else about input is deliberately locked to the
+   * 60Hz simulation — a buffered attack has to mean the same thing on every
+   * machine — but the camera is not gameplay, it is presentation, and quantising
+   * it to 60Hz visibly stair-steps every mouse movement on a 120Hz display.
+   *
+   * Mouse motion is a delta that has already happened, so it is drained.
+   * Stick deflection is a rate, so it is multiplied by this frame's dt.
+   */
+  consumeLook(dt) {
+    const out = _look.set(0, 0);
+
+    const mouseSens = TUNING.camera.lookSensitivityMouse;
+    const mouseInvert = TUNING.input.kbm.invertY ? -1 : 1;
+    out.x += this.#lookAccum.x * mouseSens;
+    out.y += -this.#lookAccum.y * mouseSens * mouseInvert;
+    this.#lookAccum.set(0, 0);
+
+    const pad = this.gamepad;
+    if (pad) {
+      const cfg = TUNING.input.gamepad;
+      const lk = applyRadialDeadzone(
+        pad.axes[2] ?? 0, pad.axes[3] ?? 0,
+        cfg.innerDeadzone, cfg.outerDeadzone, cfg.lookCurveExponent
+      );
+      const sens = TUNING.camera.lookSensitivityGamepad;
+      const invert = cfg.invertY ? -1 : 1;
+      out.x += lk.x * sens * dt;
+      out.y += -lk.y * sens * dt * invert;
+    }
+    return out;
+  }
 
   #bindDom() {
     const stop = (e) => {
@@ -117,6 +166,10 @@ export class InputSystem {
       if (!this.pointerLocked) return;
       this.#mouseDelta.x += e.movementX;
       this.#mouseDelta.y += e.movementY;
+      // A second accumulator, drained by the camera once per RENDERED frame
+      // rather than once per simulation step. See consumeLook().
+      this.#lookAccum.x += e.movementX;
+      this.#lookAccum.y += e.movementY;
     };
     this._onContextMenu = (e) => e.preventDefault();
     this._onPointerLockChange = () => {
@@ -168,6 +221,9 @@ export class InputSystem {
     this.#keys.clear();
     this.#mouseButtons.clear();
     this.#mouseDelta.set(0, 0);
+    // Dropped too, or the view snaps by whatever motion arrived in the frame
+    // the pointer was released.
+    this.#lookAccum.set(0, 0);
     for (const a of ALL_ACTIONS) {
       const s = this.actions[a];
       s.released = s.held;
@@ -243,8 +299,12 @@ export class InputSystem {
       pad.axes[2] ?? 0, pad.axes[3] ?? 0,
       cfg.innerDeadzone, cfg.outerDeadzone, cfg.lookCurveExponent
     );
+    // A stick reports +Y pushed DOWN, so it is negated into "positive is up".
+    // The pad has its own invert setting: this used to read the KEYBOARD's,
+    // which meant the two schemes could never disagree.
     const sens = TUNING.camera.lookSensitivityGamepad;
-    this.look.set(lk.x * sens * dt, lk.y * sens * dt * (TUNING.input.kbm.invertY ? -1 : 1));
+    const invert = TUNING.input.gamepad.invertY ? -1 : 1;
+    this.look.set(lk.x * sens * dt, -lk.y * sens * dt * invert);
 
     for (const [action, bind] of Object.entries(this.bindings.gamepad)) {
       const btn = pad.buttons[bind.button];
@@ -288,10 +348,14 @@ export class InputSystem {
       this.moveMagnitude = 0;
     }
 
+    // movementY is positive when the mouse moves DOWN, so it is negated into
+    // "positive is up". Without that negation `invertY: false` produced
+    // inverted look, which is what made the camera nauseating to use.
     const sens = TUNING.camera.lookSensitivityMouse;
+    const invert = TUNING.input.kbm.invertY ? -1 : 1;
     this.look.set(
       this.#mouseDelta.x * sens,
-      this.#mouseDelta.y * sens * (TUNING.input.kbm.invertY ? -1 : 1)
+      -this.#mouseDelta.y * sens * invert
     );
 
     for (const [action, bind] of Object.entries(this.bindings.kbm)) {
@@ -377,3 +441,5 @@ export class InputSystem {
     window.removeEventListener('gamepaddisconnected', this._onGamepadDisconnected);
   }
 }
+
+const _look = new THREE.Vector2();

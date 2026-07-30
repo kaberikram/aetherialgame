@@ -1,4 +1,5 @@
 import { EVENTS } from '../core/EventBus.js';
+import { TUNING } from '../tuning.js';
 
 const KBM_CONTROLS = [
   ['wasd', 'move  ·  hold alt to creep'],
@@ -60,17 +61,34 @@ export class PauseMenu {
       <div class="pause-inner">
         <div class="pause-title">VESSEL</div>
         <div class="pause-sub">paused</div>
+        <div class="pause-settings">
+          <div class="pause-row">
+            <span class="pause-label">look sensitivity</span>
+            <button class="pause-btn" data-act="sens-down">−</button>
+            <span class="pause-value" data-val="sens">100%</span>
+            <button class="pause-btn" data-act="sens-up">+</button>
+          </div>
+          <div class="pause-row">
+            <span class="pause-label">invert look</span>
+            <button class="pause-btn pause-wide" data-act="invert">off</button>
+          </div>
+        </div>
         <table class="pause-controls"></table>
-        <div class="pause-resume">esc or click — resume</div>
+        <div class="pause-resume">esc — resume</div>
       </div>
     `;
+    // Clicking the backdrop resumes; clicking a setting must not. Without this
+    // the menu closes the instant you try to adjust anything.
     el.addEventListener('mousedown', (e) => {
       e.stopPropagation();
-      this.toggle();
+      const act = e.target?.dataset?.act;
+      if (act) { this.#onSetting(act); return; }
+      if (e.target === el || e.target.closest('.pause-inner') === null) this.toggle();
     });
     document.getElementById('ui-root').appendChild(el);
     this.el = el;
     this.table = el.querySelector('.pause-controls');
+    this.#loadSettings();
 
     if (!document.getElementById('pause-styles')) {
       const s = document.createElement('style');
@@ -102,9 +120,71 @@ export class PauseMenu {
           margin-top:32px; font:400 11px/1 ui-monospace,monospace;
           letter-spacing:.26em; color:#565c66;
         }
+        .pause-settings {
+          margin:0 auto 26px; display:flex; flex-direction:column; gap:8px;
+          align-items:center;
+        }
+        .pause-row { display:flex; align-items:center; gap:8px; }
+        .pause-label {
+          font:400 12.5px/1 ui-monospace,monospace; color:#9aa2ae;
+          width:132px; text-align:right;
+        }
+        .pause-value {
+          font:400 12.5px/1 ui-monospace,monospace; color:#d5dae2;
+          width:46px; text-align:center;
+        }
+        .pause-btn {
+          font:400 12.5px/1 ui-monospace,monospace; color:#d5dae2;
+          background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14);
+          border-radius:3px; padding:4px 9px; cursor:pointer; min-width:26px;
+        }
+        .pause-btn:hover { background:rgba(255,255,255,.13); }
+        .pause-wide { min-width:46px; }
       `;
       document.head.appendChild(s);
     }
+  }
+
+  /**
+   * Look settings live here rather than in tuning.js because they are the
+   * player's preference, not the game's design. "Too fast" and "inverted" are
+   * the two complaints a third-person camera reliably generates, and neither
+   * has a correct answer someone else gets to pick.
+   *
+   * Sensitivity is stored as a multiplier and applied to both device
+   * sensitivities, so switching between mouse and pad keeps the same feel.
+   */
+  #loadSettings() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('vessel.look') ?? '{}'); } catch { /* first run */ }
+    this.baseMouse = TUNING.camera.lookSensitivityMouse;
+    this.basePad = TUNING.camera.lookSensitivityGamepad;
+    this.sens = saved.sens ?? 1;
+    this.invert = saved.invert ?? false;
+    this.#applySettings();
+  }
+
+  #applySettings() {
+    TUNING.camera.lookSensitivityMouse = this.baseMouse * this.sens;
+    TUNING.camera.lookSensitivityGamepad = this.basePad * this.sens;
+    TUNING.input.kbm.invertY = this.invert;
+    TUNING.input.gamepad.invertY = this.invert;
+
+    const v = this.el.querySelector('[data-val="sens"]');
+    if (v) v.textContent = `${Math.round(this.sens * 100)}%`;
+    const b = this.el.querySelector('[data-act="invert"]');
+    if (b) b.textContent = this.invert ? 'on' : 'off';
+
+    try {
+      localStorage.setItem('vessel.look', JSON.stringify({ sens: this.sens, invert: this.invert }));
+    } catch { /* private browsing */ }
+  }
+
+  #onSetting(act) {
+    if (act === 'sens-up') this.sens = Math.min(3, +(this.sens + 0.1).toFixed(2));
+    else if (act === 'sens-down') this.sens = Math.max(0.2, +(this.sens - 0.1).toFixed(2));
+    else if (act === 'invert') this.invert = !this.invert;
+    this.#applySettings();
   }
 
   toggle() {
