@@ -113,10 +113,12 @@ export class CameraRig {
   #updateFree(dt) {
     const c = TUNING.camera;
     // Auto-recenter behind the player after a spell of no camera input, so
-    // traversal does not become a two-stick chore.
+    // traversal does not become a two-stick chore. GAMEPAD ONLY: a mouse user
+    // parks the camera deliberately, and a camera that drifts back on its own
+    // reads as the game wrestling the mouse away from them.
     const p = this.player;
     const moving = Math.hypot(p.velocity.x, p.velocity.z) > 1.2;
-    if (this.idleTime > c.autoRecenterDelay && moving) {
+    if (this.idleTime > c.autoRecenterDelay && moving && this.input.device === 'gamepad') {
       // The rig's yaw is the direction from the pivot OUT to the camera, so
       // sitting behind the player means facing + π. Targeting `facing` puts the
       // camera in front, and since movement is camera-relative the two then

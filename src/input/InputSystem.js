@@ -100,11 +100,17 @@ export class InputSystem {
     this._onKeyUp = (e) => this.#keys.delete(e.code);
     this._onMouseDown = (e) => {
       if (e.target.closest?.('button, a, input, select')) return;
-      this.#mouseButtons.add(e.button);
-      this.#mousePressedThisStep.add(e.button);
       this.#setDevice('kbm');
       if (e.button === 1) e.preventDefault();
-      this.requestPointerLock();
+      // The click that captures the pointer is spent on capturing the pointer.
+      // Without this, the first click of the session also swings the sword,
+      // which reads as the game firing an attack the player never asked for.
+      if (!this.pointerLocked) {
+        this.requestPointerLock();
+        return;
+      }
+      this.#mouseButtons.add(e.button);
+      this.#mousePressedThisStep.add(e.button);
     };
     this._onMouseUp = (e) => this.#mouseButtons.delete(e.button);
     this._onMouseMove = (e) => {

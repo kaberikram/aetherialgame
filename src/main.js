@@ -19,6 +19,7 @@ import { BossBar } from './ui/BossBar.js';
 import { VoidSequence } from './narrative/VoidSequence.js';
 import { Pigeon } from './companion/Pigeon.js';
 import { HUD } from './ui/HUD.js';
+import { PauseMenu } from './ui/PauseMenu.js';
 import { DebugSystem } from './debug/DebugSystem.js';
 import { StatsOverlay } from './debug/StatsOverlay.js';
 import { StateInspector } from './debug/StateInspector.js';
@@ -130,10 +131,12 @@ async function main() {
   const intro = new VoidSequence(engine, player, cameraRig).build();
   intro.landingPosition = WAYPOINTS.embodiment.clone();
   intro.landingFacing = Math.PI;
+  intro.hud = hud;
+  intro.pigeon = pigeon;
   intro.onComplete = () => {
     cameraRig.snap({ yaw: intro.landingFacing + Math.PI });
     zones.snapTo('descent');
-    hud.setVisible(true);
+    hud.setBarsVisible(true);
   };
 
   // --- module registration, ordered by STAGE ------------------------------
@@ -152,14 +155,18 @@ async function main() {
   engine.add(checkpoints, STAGE.WORLD);
   engine.add(hud, STAGE.UI);
   engine.add(new BossBar(engine), STAGE.UI);
+  engine.add(new PauseMenu(engine), STAGE.UI + 5);
   engine.add(new StatsOverlay(engine, debug), STAGE.DEBUG);
   engine.add(new StateInspector(engine, debug, player, lockOn), STAGE.DEBUG);
   engine.add(new GamepadOverlay(engine, debug, input, player), STAGE.DEBUG);
   engine.add(new CombatInspector(engine, debug, player, dummies), STAGE.DEBUG);
 
-  // Debug keys that need gameplay references.
+  // Debug keys that need gameplay references. The intro skip lives on
+  // backtick, NOT Escape — Escape is the most natural key for a confused
+  // player (and the browser's pointer-lock release), and having it silently
+  // skip the opening is how the first playtest teleported past beat 1.
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !intro.finished) intro.skip();
+    if (e.key === '\`' && !intro.finished) intro.skip();
     if (e.key === '0') TUNING.debug.invulnerable = !TUNING.debug.invulnerable;
     if (e.key === '-') player.vitals.applyDamage(9999, 0, 'debug') && player.die();
     if (e.key === '=') player.refillFlask();
@@ -183,7 +190,9 @@ async function main() {
   if (TUNING.debug.startZone) {
     intro.skip();
   } else {
-    hud.setVisible(false);
+    // Bars only — subtitles, prompts and hints MUST stay live in the void.
+    // Hiding the whole HUD here is the bug that made the opening unplayable.
+    hud.setBarsVisible(false);
     intro.start(chapter.group);
   }
 

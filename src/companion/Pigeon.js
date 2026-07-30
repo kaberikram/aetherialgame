@@ -47,6 +47,9 @@ export class Pigeon {
     this.spokenBeats = new Set();
     this.flinchTimer = 0;
     this.starRepulsor = null;
+    /** When set, the bird hovers here instead of leading the path. Beat 1
+     *  uses this to stage it beside the corpse it just dropped. */
+    this.holdPosition = null;
 
     this.#build();
     this.#bindBarks();
@@ -216,6 +219,31 @@ export class Pigeon {
     this.starRepulsor = { position: position.clone(), radius };
   }
 
+  /** Park the bird at a fixed point (it still bobs and faces the player). */
+  holdAt(position, { visible = true } = {}) {
+    this.holdPosition = position.clone();
+    this.position.copy(position);
+    this.velocity.set(0, 0, 0);
+    this.group.position.copy(position);
+    this.group.visible = visible;
+  }
+
+  /** Return to path-leading. Optionally teleport to rejoin the path — the
+   *  void sits 600m above the level, and flying down is not a good scene. */
+  release(atPosition = null) {
+    this.holdPosition = null;
+    if (atPosition) {
+      this.position.copy(atPosition);
+      this.velocity.set(0, 0, 0);
+      this.group.position.copy(this.position);
+    }
+    this.group.visible = true;
+  }
+
+  setVisible(v) {
+    this.group.visible = v;
+  }
+
   setPath(waypoints) {
     this.path = waypoints;
     this.waypointIndex = 0;
@@ -284,6 +312,7 @@ export class Pigeon {
   /** Stays ahead of the player, and out of the camera's line to them. */
   #leadTarget() {
     const c = TUNING.companion;
+    if (this.holdPosition) return this.holdPosition;
     if (!this.path?.length) return this.position;
 
     // Track the waypoint nearest the player, then lead from the one after it.

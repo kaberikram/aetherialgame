@@ -136,3 +136,23 @@ PHASES.md asks for an exit that is "a triumph rather than a fight with the camer
 
 ### D33. Companion pathing scans rather than increments
 The first version advanced a waypoint index forward only, which left the bird stranded at the start of the chapter after any warp, death respawn, or backtrack. It now finds the waypoint nearest the player each step and leads from the next one.
+
+
+---
+
+## First-playtest fixes
+
+### D34. The guidance layer must never be hidden with the HUD
+The first playtest was unplayable because `hud.setVisible(false)` during the void hid the subtitles and the interact prompt along with the stat bars — every line and prompt fired into an invisible layer. The HUD now splits into stat bars (hidden when there is no body) and a narrative layer (subtitles, prompts, hints) that is always live. The smoke harness's `intro` script asserts this stays true.
+
+### D35. Escape never skips content
+The debug intro-skip sat on Escape — the most natural key for a confused player, and the browser's own pointer-lock-release key. Pressing it silently teleported past beat 1, which the playtester experienced as "suddenly I'm at the next scene." Skip now lives on backtick with the other debug keys; Escape opens a pause overlay listing the controls for the active device.
+
+### D36. One scoped deviation from "no tutorial popups"
+PROJECT.md forbids tutorial popups and is right about gameplay. But a web game cannot teach pointer lock through geometry: a mouse camera that silently does nothing is undiscoverable. One quiet hint line exists for input affordances only — "wasd — drift · click, then move mouse — look" in the void, gone permanently once the player has done both, plus "click to look around" whenever the pointer is unlocked on KB/M. Nothing about the game is ever taught this way.
+
+### D37. The corpse announces itself
+The body spawned 15m away after 5s, lit only by the player's falloff (~2% at that range) on a black screen. It now appears at 2.5s, 9m ahead, in the camera's snapped view direction, with its own pale gleam — and the pigeon hovers over it, per the beat sheet, so its opening line has a visible speaker. Same beat, now legible.
+
+### D38. The pointer-capture click is spent
+A mousedown while the pointer is unlocked only captures the pointer; it no longer also registers as an attack. Auto-recenter is likewise gamepad-only now — a mouse user parks the camera deliberately, and a camera that drifts back on its own reads as the game wrestling the mouse away.

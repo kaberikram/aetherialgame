@@ -41,13 +41,14 @@ Open the printed local URL. Click the canvas once to capture the mouse.
 | E | Interact |
 | Tab | Lock on / cycle target |
 | C | Alignment ability |
+| Esc | Pause + controls reference |
 
 **Gamepad** follows the Xbox-style Elden Ring layout in
 [CONTROLS.md](CONTROLS.md) exactly, including analog-trigger deflect.
 
 **Debug overlay:** F1 stats · F2 hitboxes & frame data · F3 state inspector ·
 F4 gamepad overlay · F8 pause (`.` steps one frame) · 1–5 warp to zone ·
-8 wing choice · 9 boss fight · `-` die · `=` refill flask · Esc skip intro.
+8 wing choice · 9 boss fight · `-` die · `=` refill flask · backtick skip intro.
 
 ## Verifying a build
 

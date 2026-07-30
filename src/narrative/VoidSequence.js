@@ -42,6 +42,13 @@ export class VoidSequence {
     this.onComplete = null;
     this.promptShown = false;
 
+    /** Wired by main.js: the HUD (for the input hint) and the pigeon. */
+    this.hud = null;
+    this.pigeon = null;
+    this.hasMoved = false;
+    this.hasLooked = false;
+    this.hintCleared = false;
+
     /** Where the body is standing when the world resolves. Set by the caller. */
     this.landingPosition = new THREE.Vector3(0, 0, 0);
     this.landingFacing = 0;
@@ -77,6 +84,17 @@ export class VoidSequence {
 
     this.corpse = new CorpseActor(this.scene);
 
+    // The corpse's own pale gleam. Without it the body is lit only by the
+    // player's falloff — invisible at spawn distance on a black screen, which
+    // is exactly how the first playtest got lost.
+    this.corpseGlow = new THREE.Group();
+    this.corpseGlow.add(makeGlow({ color: 0x9fb0c8, scale: 2.6, opacity: 0.34, power: 3.0 }));
+    const gleam = new THREE.PointLight(0xaebdd4, 2.6, 12, 1.6);
+    gleam.position.y = 0.9;
+    this.corpseGlow.add(gleam);
+    this.corpseGlow.visible = false;
+    this.scene.add(this.corpseGlow);
+
     this.scene.add(this.group);
     return this;
   }
@@ -100,13 +118,25 @@ export class VoidSequence {
     this.scene.background = new THREE.Color(0x000000);
     this.scene.fog = null;
 
-    this.player.beginDrift(new THREE.Vector3(0, VOID_ALTITUDE + 2.4, 15));
+    // Spawn 9m out, and SNAP the camera to face where the corpse will appear.
+    // The first frame must already be pointed at the one thing that matters.
+    this.player.beginDrift(new THREE.Vector3(0, VOID_ALTITUDE + 1.6, 9));
     this.phase = 'drift';
     this.timer = 0;
 
     this.cameraRig.enabled = true;
     this.cameraRig.collisionEnabled = false;
-    this.bus.emit(EVENTS.BEAT_ENTERED, { id: 1 });
+    this.cameraRig.pitch = 0.10;
+    this.cameraRig.snap({ yaw: 0 });
+
+    // The pigeon is here from the start of the scene but unseen until the
+    // corpse is revealed — beat 1 is "the pigeon appears dragging a corpse".
+    this.pigeon?.setVisible(false);
+
+    // The only tutorial text in the game: input affordances, nothing more.
+    // A web game cannot teach pointer lock through geometry. Cleared for good
+    // the moment the player has both moved and looked.
+    this.hud?.setHint('wasd — drift    ·    click, then move mouse — look');
     return this;
   }
 
@@ -133,6 +163,7 @@ export class VoidSequence {
 
   #updateDrift(dt) {
     this.wisp.position.copy(this.player.position);
+    this.#updateHint();
     // A slow pulse, off-tempo from a heartbeat. Not quite alive.
     const pulse = 0.86 + Math.sin(this.timer * 1.7) * 0.11 + Math.sin(this.timer * 0.41) * 0.05;
     this.wisp.material.opacity = pulse;
@@ -140,12 +171,18 @@ export class VoidSequence {
     this.wisp.scale.setScalar(0.9 + pulse * 0.16);
     this.halos[1].material.opacity = 0.22 + pulse * 0.14;
 
-    // The corpse is only introduced once the player has had time to notice
-    // there is nothing else. Roughly five seconds of pure void first.
-    if (this.timer > 5.0 && !this.corpseShown) {
+    // A beat of pure void, then the corpse — with its gleam, and the pigeon
+    // hovering over what it just dropped. Its opening line lands here, when
+    // there is finally something on screen to attach it to.
+    if (this.timer > 2.5 && !this.corpseShown) {
       this.corpseShown = true;
       this.placeCorpse();
-      this.bus.emit(EVENTS.BEAT_ENTERED, { id: 2 });
+      this.corpseGlow.position.copy(this.corpsePosition);
+      this.corpseGlow.visible = true;
+      this.pigeon?.holdAt(
+        this.corpsePosition.clone().add(new THREE.Vector3(1.3, 1.7, 0.6))
+      );
+      this.bus.emit(EVENTS.BEAT_ENTERED, { id: 1 });
     }
 
     if (!this.corpseShown) return;
@@ -160,7 +197,7 @@ export class VoidSequence {
       this.player.velocity.addScaledVector(_v, (1 - dist / 12) * 5.5 * dt);
     }
 
-    if (dist < 3.6) {
+    if (dist < 4.2) {
       if (!this.promptShown) {
         this.promptShown = true;
         this.bus.emit(EVENTS.INTERACT_AVAILABLE, { id: 'corpse', label: 'take it' });
@@ -171,6 +208,20 @@ export class VoidSequence {
     } else if (this.promptShown) {
       this.promptShown = false;
       this.bus.emit(EVENTS.INTERACT_AVAILABLE, null);
+    }
+  }
+
+  /** Fades the hint once the player has demonstrated both verbs. */
+  #updateHint() {
+    if (this.hintCleared || !this.hud) return;
+    if (Math.hypot(this.input.move.x, this.input.move.y) > 0.15) this.hasMoved = true;
+    if (this.input.pointerLocked
+      && (Math.abs(this.input.look.x) > 0.0005 || Math.abs(this.input.look.y) > 0.0005)) {
+      this.hasLooked = true;
+    }
+    if (this.hasMoved && this.hasLooked) {
+      this.hintCleared = true;
+      this.hud.setHint(null);
     }
   }
 
@@ -206,6 +257,8 @@ export class VoidSequence {
       // takes over from the corpse actor mid-pose — both are the same rig
       // playing the same clip, so the handoff is invisible.
       this.corpse.setVisible(false);
+      this.corpseGlow.visible = false;
+      this.#releasePigeon();
       this.#restoreWorld();
       this.player.beginCorpse(this.landingPosition, this.landingFacing);
       this.player.beginStandUp();
@@ -235,12 +288,23 @@ export class VoidSequence {
     return this.phase === 'done';
   }
 
+  /** Hands the bird back to its level path, beside the embodiment ledge. */
+  #releasePigeon() {
+    this.pigeon?.release(
+      this.landingPosition.clone().add(new THREE.Vector3(1.5, 2.2, -3))
+    );
+  }
+
   /** Debug skip, for iterating on anything after beat 2. */
   skip() {
     this.wisp.visible = false;
     this.wispLight.intensity = 0;
     this.phase = 'done';
     this.corpse.setVisible(false);
+    this.corpseGlow.visible = false;
+    this.hud?.setHint(null);
+    this.hintCleared = true;
+    this.#releasePigeon();
     this.#restoreWorld();
     this.scene.background = new THREE.Color(0x151a21);
     this.scene.fog = new THREE.FogExp2(0x151a21, 0.0032);
@@ -256,6 +320,7 @@ export class VoidSequence {
 
   dispose() {
     this.scene.remove(this.group);
+    this.scene.remove(this.corpseGlow);
     this.wisp.geometry.dispose();
     this.wisp.material.dispose();
     this.corpse?.dispose();

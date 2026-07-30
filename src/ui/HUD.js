@@ -1,5 +1,11 @@
 import { EVENTS } from '../core/EventBus.js';
 
+/** Key names shown in prompts, per device. */
+const KEY_HINTS = {
+  kbm: { interact: 'E' },
+  gamepad: { interact: 'A' },
+};
+
 /**
  * HUD — plain DOM, driven by events, never polled, never load-bearing.
  *
@@ -27,6 +33,7 @@ export class HUD {
       </div>
       <div class="hud-subtitle"></div>
       <div class="hud-prompt"></div>
+      <div class="hud-hint"></div>
     `;
     this.healthFill = this.root.querySelector('.hud-health i');
     this.healthGhost = this.root.querySelector('.hud-health em');
@@ -34,6 +41,12 @@ export class HUD {
     this.staminaFill = this.root.querySelector('.hud-stamina i');
     this.subtitle = this.root.querySelector('.hud-subtitle');
     this.prompt = this.root.querySelector('.hud-prompt');
+    this.hintEl = this.root.querySelector('.hud-hint');
+    this.bars = this.root.querySelector('.hud-bars');
+    this.device = 'kbm';
+    this.explicitHint = null;
+    this.input = engine.services.get('input') ?? null;
+    this.bus.on(EVENTS.INPUT_DEVICE_CHANGED, ({ device }) => { this.device = device; });
 
     this.staminaHideTimer = 0;
     this.subtitleTimer = 0;
@@ -48,7 +61,10 @@ export class HUD {
       if (!payload) {
         this.prompt.classList.remove('on');
       } else {
-        this.prompt.textContent = payload.label;
+        // The prompt names its key. A label with no key is a riddle, and the
+        // first playtest proved players do not solve riddles — they mash.
+        const key = KEY_HINTS[this.device]?.interact ?? 'E';
+        this.prompt.innerHTML = `${payload.label} <kbd>${key}</kbd>`;
         this.prompt.classList.add('on');
       }
     });
@@ -57,6 +73,38 @@ export class HUD {
   setVisible(v) {
     this.visible = v;
     this.root.style.opacity = v ? '1' : '0';
+  }
+
+  /**
+   * Hides the stat bars only. Subtitles, prompts and hints stay live — the
+   * void sequence has no health to show but absolutely has things to say,
+   * and hiding the whole HUD there is how the first playtest got stuck.
+   */
+  setBarsVisible(v) {
+    this.bars.style.opacity = v ? '1' : '0';
+  }
+
+  /**
+   * Input-affordance hint line. `setHint(text)` from gameplay wins; with no
+   * explicit hint, an unlocked pointer on keyboard/mouse shows "click to look"
+   * on its own, because a mouse camera that silently does nothing is the
+   * single most confusing state a web game can be in.
+   */
+  setHint(text) {
+    this.explicitHint = text || null;
+  }
+
+  #renderHint() {
+    const lockHint = this.device === 'kbm' && this.input && !this.input.pointerLocked && this.visible
+      ? 'click to look around'
+      : null;
+    const text = this.explicitHint ?? lockHint;
+    if (text) {
+      if (this.hintEl.textContent !== text) this.hintEl.textContent = text;
+      this.hintEl.classList.add('on');
+    } else {
+      this.hintEl.classList.remove('on');
+    }
   }
 
   update(dt) {
@@ -84,6 +132,8 @@ export class HUD {
       this.subtitleTimer -= dt;
       if (this.subtitleTimer <= 0) this.subtitle.classList.remove('on');
     }
+
+    this.#renderHint();
   }
 
   #styles() {
@@ -128,12 +178,29 @@ export class HUD {
         text-transform:uppercase; color:#6d7480; margin-bottom:9px;
       }
       .hud-prompt {
-        position:absolute; left:50%; bottom:26%; transform:translateX(-50%);
+        position:absolute; left:50%; bottom:30%; transform:translateX(-50%);
         opacity:0; transition:opacity .3s ease;
-        font:400 12px/1 ui-monospace,monospace; letter-spacing:.2em;
-        text-transform:uppercase; color:#aeb6c2; text-shadow:0 2px 10px #000;
+        font:400 17px/1 ui-serif, Georgia, serif; letter-spacing:.14em;
+        color:#e4e9f1; text-shadow:0 2px 14px #000, 0 0 24px rgba(0,0,0,.9);
+        padding:10px 22px; background:rgba(5,7,10,.55);
+        border:1px solid rgba(190,205,225,.22); border-radius:2px;
+        white-space:nowrap;
       }
-      .hud-prompt.on { opacity:.92; }
+      .hud-prompt.on { opacity:1; }
+      .hud-prompt kbd {
+        display:inline-block; margin-left:12px; padding:2px 9px;
+        font:600 12px/1.4 ui-monospace,monospace; letter-spacing:0;
+        color:#0c0e12; background:#c8d0dc; border-radius:3px;
+        box-shadow:0 2px 0 #7d8590; vertical-align:2px;
+      }
+      .hud-hint {
+        position:absolute; left:50%; bottom:7%; transform:translateX(-50%);
+        opacity:0; transition:opacity .6s ease;
+        font:400 12px/1 ui-monospace,monospace; letter-spacing:.22em;
+        text-transform:lowercase; color:#88909c; text-shadow:0 2px 10px #000;
+        white-space:nowrap;
+      }
+      .hud-hint.on { opacity:.85; }
     `;
     document.head.appendChild(s);
   }

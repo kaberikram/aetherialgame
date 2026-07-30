@@ -26,14 +26,14 @@ Keyboard/mouse (tuned as a first-class scheme, not derived from the pad):
 | **F** | jump; once wings resolve, takeoff and hold to flap-climb |
 | **LMB / RMB** | light / heavy attack |
 | **Q** | guard (hold) — a fresh press inside the window is a deflect |
-| **R** | flask · **E** interact · **Tab** lock-on · **C** alignment ability |
+| **R** | flask · **E** interact · **Tab** lock-on · **C** alignment ability · **Esc** pause/controls |
 
 Gamepad follows `CONTROLS.md` exactly, including analog trigger deflect.
 
 Debug: **F1** stats · **F2** hitboxes and frame data · **F3** state inspector ·
 **F4** gamepad overlay · **F8** pause (**.** steps one frame) ·
 **1–5** warp to zone · **8** wing choice · **9** boss fight · **-** die ·
-**=** refill flask · **Esc** skip the intro.
+**=** refill flask · **Esc** pause / controls · **`** (backtick) skip the intro.
 
 ## What is done
 

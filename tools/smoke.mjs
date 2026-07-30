@@ -72,9 +72,39 @@ const hold = async (page, keys, ms) => {
 
 const DRIVE_SCRIPTS = {
   idle: async () => {},
+  /**
+   * Plays the opening the way a player would: no skip key, no teleport.
+   * Asserts the guidance layer is actually visible — the exact regression
+   * that made the first playtest unplayable.
+   */
+  intro: async (page) => {
+    await page.waitForTimeout(4500); // past the corpse reveal (2.5s sim)
+
+    const hintOn = await page.evaluate(() =>
+      document.querySelector('.hud-hint')?.classList.contains('on'));
+    const subtitleShown = await page.evaluate(() =>
+      document.querySelector('.hud-subtitle')?.textContent.length > 0);
+    if (!hintOn) throw new Error('intro: input hint not visible in the void');
+    if (!subtitleShown) throw new Error('intro: beat-1 subtitle never rendered');
+
+    await page.click('canvas');
+    await hold(page, ['KeyW'], 6000); // drift at the corpse; the pull assists
+
+    await page.waitForFunction(
+      () => document.querySelector('.hud-prompt')?.classList.contains('on'),
+      { timeout: 30000 }
+    ).catch(() => { throw new Error('intro: "take it" prompt never appeared'); });
+
+    await page.keyboard.press('KeyE');
+    await page.waitForFunction(
+      () => ['standUp', 'idle', 'move'].includes(window.__VESSEL_API.player.state),
+      { timeout: 45000 }
+    ).catch(() => { throw new Error('intro: embodiment never completed'); });
+    console.log('  intro completed: void → corpse → prompt → embodiment');
+  },
   /** Skip the intro, then exercise every movement state. */
   walk: async (page) => {
-    await page.keyboard.press('Escape');
+    await page.keyboard.press('Backquote');
     await page.waitForTimeout(400);
     for (const key of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) await hold(page, [key], 650);
     await hold(page, ['KeyW', 'ShiftLeft'], 1100); // sprint
@@ -104,7 +134,7 @@ const DRIVE_SCRIPTS = {
     await page.waitForTimeout(2500);
   },
   combat: async (page) => {
-    await page.keyboard.press('Escape');
+    await page.keyboard.press('Backquote');
     await page.waitForTimeout(400);
     await hold(page, ['KeyW'], 900);
     await page.keyboard.press('Tab');
