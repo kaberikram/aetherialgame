@@ -69,6 +69,9 @@ export class Renderer {
 
   setCamera(camera) {
     this.camera = camera;
+    // The post chain holds its own reference in RenderPass and the AO pass;
+    // swapping the camera here without telling it renders the old view.
+    this.composer?.setCamera?.(camera);
     this.resize();
   }
 

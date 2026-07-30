@@ -22,6 +22,8 @@ export class ZoneBuilder {
     this.state = engine.resolve('state');
     this.group = group;
     this.materials = materials;
+    this.quality = engine.resolve('quality');
+    this.library = engine.resolve('materials');
 
     /** Point lights a zone wants animated by the chapter's update. */
     this.lights = [];
@@ -29,6 +31,23 @@ export class ZoneBuilder {
     this.emissives = [];
     /** Interactables. `{ id, position, radius, label, onPick }`. */
     this.pickups = [];
+    /** Raymarched volumes needing a per-frame update. */
+    this.volumetrics = [];
+    /** Materials from createWater(), needing a per-frame scroll and depth bind. */
+    this.waters = [];
+  }
+
+  /** Adds a VolumetricShaft/VolumetricGlow and registers it for updates. */
+  volumetric(v) {
+    this.group.add(v.mesh);
+    this.volumetrics.push(v);
+    return v;
+  }
+
+  /** Registers a material from createWater() for its per-frame update. */
+  water(material) {
+    this.waters.push(material);
+    return material;
   }
 
   /** Parents an object into the chapter group without collision. */
@@ -71,7 +90,10 @@ export class ZoneBuilder {
     l.position.copy(position);
     if (shadow) {
       l.castShadow = true;
-      l.shadow.mapSize.set(512, 512);
+      // A quarter of the key light's budget: these are fill lights whose
+      // shadows only ever fall on nearby geometry.
+      const s = Math.max(256, this.quality.shadowMap / 4);
+      l.shadow.mapSize.set(s, s);
       l.shadow.camera.far = distance;
       l.shadow.bias = -0.004;
     }

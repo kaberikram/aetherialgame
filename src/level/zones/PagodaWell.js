@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { FILTERS } from '../../physics/PhysicsWorld.js';
 import { caveTunnel, candiTower, kalaFace, banyanRoots } from '../geometry/builders.js';
+import { VolumetricShaft } from '../../render/VolumetricShaft.js';
+import { createWater } from '../../render/WaterMaterial.js';
 import { WAYPOINTS } from '../waypoints.js';
 
 /**
@@ -34,9 +36,15 @@ export function build(ctx) {
 
   const moat = new THREE.Mesh(
     new THREE.RingGeometry(13, 26, 40),
-    new THREE.MeshStandardMaterial({
-      color: 0x1c3442, roughness: 0.14, metalness: 0.4, transparent: true, opacity: 0.88,
-    })
+    ctx.water(createWater({
+      quality: ctx.quality,
+      shallow: 0x28414d,
+      deep: 0x0b1a24,
+      murkDistance: 1.2,
+      minOpacity: 0.30,
+      maxOpacity: 0.90,
+      roughness: 0.08,
+    }))
   );
   moat.rotation.x = -Math.PI / 2;
   moat.position.set(w.x, w.y + 0.12, w.z);
@@ -84,7 +92,7 @@ export function build(ctx) {
   sun.position.set(w.x + 13, oculusY, w.z + 19);
   sun.target.position.set(w.x, w.y, w.z);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(ctx.quality.shadowMap, ctx.quality.shadowMap);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 90;
   Object.assign(sun.shadow.camera, { left: -34, right: 34, top: 34, bottom: -34 });
@@ -93,19 +101,26 @@ export function build(ctx) {
   ctx.add(sun);
   ctx.add(sun.target);
 
-  const shaftCone = new THREE.Mesh(
-    new THREE.CylinderGeometry(19, 26, 58, 28, 1, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xcfe0f5, transparent: true, opacity: 0.055,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
-    })
-  );
-  shaftCone.position.set(w.x, w.y + 29, w.z);
-  ctx.add(shaftCone);
+  // The daylight shaft, raymarched, sampling the sun's own shadow map — so
+  // the candi tower carves a real silhouette out of the beam instead of the
+  // beam passing through it. That shadowed shaft is the chapter's one daylight
+  // image and the reason PROJECT.md forbids a billboard here.
+  const lightShaft = ctx.volumetric(new VolumetricShaft({
+    light: sun,
+    top: oculusY,
+    bottom: w.y - 1,
+    topRadius: 21,
+    bottomRadius: 27,
+    center: new THREE.Vector3(w.x, 0, w.z),
+    steps: ctx.quality.volumetricSteps,
+    density: 0.011,
+    intensity: 0.55,
+    color: 0xdfe9f7,
+  }));
 
   buildApproach(ctx);
 
-  return { moat, skyDisc: sky, sun, shaftCone, oculusY };
+  return { moat, skyDisc: sky, sun, lightShaft, oculusY };
 }
 
 /** The doorway from the Star Chamber, and the corridor that connects them. */

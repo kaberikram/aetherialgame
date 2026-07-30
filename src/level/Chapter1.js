@@ -34,14 +34,12 @@ export class Chapter1 {
     this.scene.add(this.group);
     this.nearestPickup = null;
 
+    // Every stone surface comes from the shared library, so three zone agents
+    // working in parallel cannot drift the palette apart, and two zones asking
+    // for laterite get one material and one texture upload rather than two.
+    const library = engine.resolve('materials');
     this.materials = {
-      rock: new THREE.MeshStandardMaterial({ color: 0x3f443f, roughness: 0.97, metalness: 0 }),
-      wetRock: new THREE.MeshStandardMaterial({ color: 0x33393f, roughness: 0.62, metalness: 0.05 }),
-      laterite: new THREE.MeshStandardMaterial({ color: 0x6a5f55, roughness: 0.95, metalness: 0 }),
-      candi: new THREE.MeshStandardMaterial({ color: 0x8a8579, roughness: 0.88, metalness: 0 }),
-      moss: new THREE.MeshStandardMaterial({ color: 0x35462c, roughness: 0.98, metalness: 0 }),
-      bark: new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 0.93, metalness: 0 }),
-      bone: new THREE.MeshStandardMaterial({ color: 0xada396, roughness: 0.86, metalness: 0 }),
+      ...library.all(),
       // Emissive, but not blown out. The rubric asks whether a frame reads in
       // grayscale, and a channel pinned at full white does not — it becomes a
       // flat shape with no internal value. Kept dark enough that the highlight
@@ -51,11 +49,17 @@ export class Chapter1 {
         roughness: 0.14, metalness: 0.25, transparent: true, opacity: 0.94,
       }),
     };
+    this.library = library;
+
+    this.post = engine.resolve('post');
+    this.gl = engine.resolve('renderer').renderer;
 
     this.ctx = new ZoneBuilder(engine, this.group, this.materials);
     this.lights = this.ctx.lights;
     this.emissives = this.ctx.emissives;
     this.pickups = this.ctx.pickups;
+    this.volumetrics = this.ctx.volumetrics;
+    this.waters = this.ctx.waters;
   }
 
   build() {
@@ -64,6 +68,18 @@ export class Chapter1 {
       GreenVein.build(this.ctx),
       PoolApproach.build(this.ctx),
       PagodaWell.build(this.ctx));
+    return this;
+  }
+
+  /**
+   * Bakes every volumetric's light-space occlusion map.
+   *
+   * Called once from main, after the whole world exists — not from build(),
+   * because the arena and the companion are constructed after the chapter and
+   * a bake that ran here would be missing them.
+   */
+  bakeVolumetrics() {
+    for (const v of this.volumetrics) v.bake?.(this.gl, this.scene);
     return this;
   }
 
@@ -105,6 +121,14 @@ export class Chapter1 {
         l.intensity = 5.6 * (1 + Math.sin(t * 0.7 + i) * 0.16);
       }
     }
+
+    // Volumetrics and water both want scene depth, and both tolerate it being
+    // a frame old. When the post chain is off the getter returns null and they
+    // fall back to their non-depth path rather than failing.
+    const camera = this.engine.resolve('renderer').camera;
+    const depth = this.post?.depthTexture ?? null;
+    for (const v of this.volumetrics) v.update(dt, camera, depth);
+    for (const w of this.waters) w.userData.water.update(dt, camera, this.gl, depth);
   }
 
   dispose() {

@@ -3,6 +3,9 @@ import { Engine, STAGE } from './core/Engine.js';
 import { GameState } from './core/GameState.js';
 import { EVENTS } from './core/EventBus.js';
 import { Renderer } from './render/Renderer.js';
+import { PostChain } from './render/PostChain.js';
+import { MaterialLibrary } from './render/MaterialLibrary.js';
+import { resolveQuality } from './render/quality.js';
 import { PhysicsWorld } from './physics/PhysicsWorld.js';
 import { InputSystem } from './input/InputSystem.js';
 import { PlayerController, STATE } from './character/PlayerController.js';
@@ -57,8 +60,16 @@ async function main() {
   state.load();
 
   const viewport = document.getElementById('viewport');
+  const quality = engine.provide('quality', resolveQuality());
   const renderer = engine.provide('renderer', new Renderer(viewport));
   renderer.attach(engine);
+
+  boot.step(11, 'post chain');
+  const post = engine.provide('post', new PostChain(engine, quality));
+  if (post.enabled) renderer.composer = post;
+
+  boot.step(15, 'surfaces');
+  const materials = engine.provide('materials', new MaterialLibrary(quality));
 
   const debug = engine.provide('debug', new DebugSystem(engine, document.getElementById('debug-root')));
 
@@ -100,6 +111,7 @@ async function main() {
   checkpoints.add({ id: 'poolEdge', position: WAYPOINTS.poolApproach.clone().setY(-22.2), facing: Math.PI });
 
   const zones = engine.provide('zones', new ZoneManager(engine));
+  zones.post = post; // the grade rides the zone crossfade
   const bounds = (minX, minY, minZ, maxX, maxY, maxZ) => ({
     min: new THREE.Vector3(minX, minY, minZ), max: new THREE.Vector3(maxX, maxY, maxZ),
   });
@@ -196,6 +208,9 @@ async function main() {
     intro.start(chapter.group);
   }
 
+  boot.step(92, 'daylight');
+  chapter.bakeVolumetrics();
+
   boot.step(94, 'first frame');
   renderer.render();
   engine.add(renderer, STAGE.RENDER);
@@ -209,6 +224,7 @@ async function main() {
   window.__VESSEL_API = {
     engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
     encounter, boss: encounter.boss, arena: encounter.arena, alignment, pigeon, STATE,
+    renderer, post, materials, quality,
   };
 }
 

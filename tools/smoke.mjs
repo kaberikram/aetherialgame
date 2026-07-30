@@ -25,7 +25,19 @@ const CHROME_PATH = ['/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-119
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CAPTURES = path.join(ROOT, 'captures');
 const PORT = 5199;
-const URL = `http://localhost:${PORT}/`;
+
+/**
+ * Gameplay scripts run at `quality=low`: no AO, no SMAA, small textures.
+ *
+ * These scripts assert that the game runs and that its states are reachable,
+ * and none of that is a rendering question. On software GL the full chain
+ * costs enough per frame that the fixed-step simulation — capped at five steps
+ * per rendered frame — falls far behind wall-clock, so a drive script waiting
+ * on an animation to finish times out for reasons that have nothing to do with
+ * the game. Frame quality is `tools/rubric.mjs`'s job.
+ *
+ * Pass --quality high to run a gate against the shipping chain.
+ */
 
 const BUDGET = { drawCalls: 1500, cpuMs: 4.0, fps: 55 };
 
@@ -34,6 +46,9 @@ const arg = (name, fallback = null) => {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : (i >= 0 ? true : fallback);
 };
+
+const QUALITY = arg('quality', 'low');
+const URL = `http://localhost:${PORT}/?quality=${QUALITY}`;
 
 /** A previous run that was killed mid-flight can leave the port held. */
 function freePort() {
@@ -78,14 +93,16 @@ const DRIVE_SCRIPTS = {
    * that made the first playtest unplayable.
    */
   intro: async (page) => {
-    await page.waitForTimeout(4500); // past the corpse reveal (2.5s sim)
+    // Waited on, not slept through: the corpse reveal is at 2.5s of SIMULATION
+    // time, and under software GL the simulation runs well behind wall-clock.
+    await page.waitForFunction(
+      () => document.querySelector('.hud-subtitle')?.textContent.length > 0,
+      { timeout: 60000 }
+    ).catch(() => { throw new Error('intro: beat-1 subtitle never rendered'); });
 
     const hintOn = await page.evaluate(() =>
       document.querySelector('.hud-hint')?.classList.contains('on'));
-    const subtitleShown = await page.evaluate(() =>
-      document.querySelector('.hud-subtitle')?.textContent.length > 0);
     if (!hintOn) throw new Error('intro: input hint not visible in the void');
-    if (!subtitleShown) throw new Error('intro: beat-1 subtitle never rendered');
 
     await page.click('canvas');
     await hold(page, ['KeyW'], 6000); // drift at the corpse; the pull assists
