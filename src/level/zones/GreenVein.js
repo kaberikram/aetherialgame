@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { EVENTS } from '../../core/EventBus.js';
 import {
-  banyanRoots, rubbleField, speleothems, caveTunnel, waterBody,
+  banyanRoots, rubbleField, speleothems, caveTunnel, waterBody, slopedFloor,
 } from '../geometry/builders.js';
 import { buildSword } from '../../character/Weapon.js';
 import { buildCharacter } from '../../character/Rig.js';
@@ -9,22 +9,9 @@ import { GREEN_VEIN_FLOOR, WAYPOINTS } from '../waypoints.js';
 import { createWater } from '../../render/WaterMaterial.js';
 import { fbm, materialSet, makeGlow } from '../../render/procedural/textures.js';
 
-/**
- * The floor the player actually walks on is a run of flat, 8m-long boxes
- * (see buildCavern below), each sampling GREEN_VEIN_FLOOR only at its own
- * centre — a stepped approximation of the continuous slope, not the slope
- * itself. Away from a box's centre the two disagree by up to ~0.5m. The
- * water body is broad and long enough that sampling the smooth function
- * directly makes it drift visibly off that stepped floor: floating clear of
- * it in one stretch, sunk under the opaque floor and invisible in the next.
- * This mirrors the exact box the floor loop builds, so the water always
- * reads relative to the surface that is actually there.
- */
-function floorSegmentY(z) {
-  const segStep = 8;
-  const k = Math.min(6, Math.max(0, Math.round((z + 2) / -segStep)));
-  return GREEN_VEIN_FLOOR(-2 - segStep * k);
-}
+/** Floor width and centre offset, shared by the surface and anything on it. */
+const FLOOR_WIDTH = (z) => 22 + Math.sin(z * 0.12) * 5;
+const FLOOR_OFFSET = (z) => Math.sin(z * 0.09) * 2.2;
 
 /**
  * Beats 3 and 5 — the bioluminescent stretch, and the sword.
@@ -64,19 +51,23 @@ function buildCavern(ctx) {
   const warmBark = ctx.library.get('bark', { color: new THREE.Color(0xa3835a) });
   const warmFloor = ctx.library.get('wetRock', { color: new THREE.Color(0x7c6a4a) });
 
-  const segStep = 8;
-  for (let z = 2; z >= -54; z -= segStep) {
-    const y = floorY(z - segStep / 2);
-    const width = 22 + Math.sin(z * 0.12) * 5;
-    ctx.box(
-      new THREE.Vector3(width, 1.2, segStep + 0.4),
-      new THREE.Vector3(Math.sin(z * 0.09) * 2.2, y - 0.6, z - segStep / 2),
-      warmFloor
-    );
-  }
+  // One ribbon that follows GREEN_VEIN_FLOOR per vertex, replacing the run of
+  // 8m boxes that each sampled it once at their own centre. The boxes were a
+  // staircase standing in for a slope: they disagreed with the function by up
+  // to 0.54m, which is why the water needed a local helper to find the floor
+  // that was actually there. Now there is nothing to disagree with, and it is
+  // one draw call and one collider instead of eight of each.
+  ctx.solid(
+    slopedFloor({
+      fromZ: 2, toZ: -54,
+      floorY, widthAt: FLOOR_WIDTH, offsetAt: FLOOR_OFFSET,
+      segments: 56, skirt: 1.8,
+    }),
+    warmFloor, null, { collide: true }
+  );
 
-  // Cavern shell: walls and ceiling only. The floor boxes above are what the
-  // player actually stands on, so the shell is sized to sit outside them.
+  // Cavern shell: walls and ceiling only. The floor ribbon above is what the
+  // player actually stands on, so the shell is sized to sit outside it.
   const curve = new THREE.CatmullRomCurve3([
     new THREE.Vector3(0, floorY(4) + 7, 4),
     new THREE.Vector3(2, floorY(-10) + 7.5, -10),
@@ -105,12 +96,9 @@ function buildCavern(ctx) {
 
   // In-water stalagmites: dark silhouettes standing IN the jade lake, per the
   // concept board, catching the rim glow only where their base meets it.
-  // Based on the stepped floor, like the water — same reasoning: these sit
-  // right at the waterline, where the mismatch against the smooth function
-  // is most visible as floating or buried geometry.
   for (const [x, z] of [[-3.6, -14], [1.4, -33], [0.8, -47]]) {
     ctx.solid(speleothems({ count: 3, radius: 1.1, length: 2.6, up: true, seed: Math.abs(z) + 71 }),
-      warmRock, new THREE.Vector3(x, floorSegmentY(z) - 0.15, z), { collide: false });
+      warmRock, new THREE.Vector3(x, GREEN_VEIN_FLOOR(z) - 0.15, z), { collide: false });
   }
 
   // A warm kiss of light on walls and roots near the midground. Near-zero
@@ -138,16 +126,16 @@ function buildWater(ctx) {
     { x: 0, z: -50, width: 10.2 },
   ];
 
-  // floorSegmentY, not the continuous GREEN_VEIN_FLOOR — the water sits on
-  // the actual stepped floor boxes, and drifts off them if it trusts the
-  // smooth function instead (see floorSegmentY's own comment).
+  // Straight off GREEN_VEIN_FLOOR. The floor is that function now, rather
+  // than a staircase approximating it, so there is no longer a second height
+  // to reconcile against.
   const geo = waterBody({
-    anchors, floorY: floorSegmentY, lift: 0.11, dip: 0.055,
+    anchors, floorY: GREEN_VEIN_FLOOR, lift: 0.11, dip: 0.055,
     segments: 110, radial: 16, edgeNoise: 0.38, seed: 12,
   });
 
   const centreline = new THREE.CatmullRomCurve3(
-    anchors.map((a) => new THREE.Vector3(a.x, floorSegmentY(a.z) + 0.11, a.z))
+    anchors.map((a) => new THREE.Vector3(a.x, GREEN_VEIN_FLOOR(a.z) + 0.11, a.z))
   );
   const material = buildJadeWaterMaterial(ctx.quality, centreline.getLength());
 

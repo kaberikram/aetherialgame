@@ -544,3 +544,76 @@ export function oculusRim({ radius = 21, thickness = 3.2, segments = 26, jaggedn
   }
   return mergeGeometries(parts, false);
 }
+
+/**
+ * A walkable ribbon whose surface follows a height FUNCTION exactly.
+ *
+ * The Green Vein's floor used to be a run of 8m boxes, each sampling its
+ * height once at its own centre — a staircase standing in for a slope. The
+ * collider and `GREEN_VEIN_FLOOR` therefore disagreed by up to half a metre
+ * away from those centres, so anything that derived its height from the
+ * function (the water, the stalagmites at the waterline) either floated above
+ * the floor or sank through it, and the zone carried a local workaround to
+ * paper over the difference. This samples the function per vertex instead, so
+ * there is nothing to disagree with.
+ *
+ * A skirt hangs from the edges so the banks read as rock with thickness rather
+ * than as a sheet of paper seen edge-on.
+ *
+ * @param {(z:number)=>number} floorY   surface height at a given z
+ * @param {(z:number)=>number} widthAt  full width at a given z
+ * @param {(z:number)=>number} offsetAt centre x at a given z
+ */
+export function slopedFloor({
+  fromZ, toZ, floorY, widthAt, offsetAt = () => 0,
+  segments = 56, skirt = 1.6,
+}) {
+  const positions = [];
+  const indices = [];
+  const uvs = [];
+
+  const rows = segments + 1;
+  const cols = 2; // one quad across; the surface is flat side to side
+  for (let i = 0; i < rows; i++) {
+    const t = i / segments;
+    const z = fromZ + (toZ - fromZ) * t;
+    const y = floorY(z);
+    const half = widthAt(z) / 2;
+    const cx = offsetAt(z);
+    positions.push(cx - half, y, z, cx + half, y, z);
+    uvs.push(0, t, 1, t);
+  }
+  for (let i = 0; i < segments; i++) {
+    const a = i * cols;
+    const b = a + 1;
+    const c = a + cols;
+    const d = c + 1;
+    indices.push(a, c, b, b, c, d);
+  }
+
+  // Skirts: two vertical strips hanging from the outer edges.
+  const base = positions.length / 3;
+  for (let i = 0; i < rows; i++) {
+    const t = i / segments;
+    const z = fromZ + (toZ - fromZ) * t;
+    const y = floorY(z);
+    const half = widthAt(z) / 2;
+    const cx = offsetAt(z);
+    positions.push(cx - half, y, z, cx - half, y - skirt, z);
+    positions.push(cx + half, y, z, cx + half, y - skirt, z);
+    uvs.push(0, t, 0.1, t, 1, t, 0.9, t);
+  }
+  for (let i = 0; i < segments; i++) {
+    const l = base + i * 4;
+    indices.push(l, l + 1, l + 4, l + 1, l + 5, l + 4);         // left skirt
+    const r = l + 2;
+    indices.push(r, r + 4, r + 1, r + 1, r + 4, r + 5);         // right skirt
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}

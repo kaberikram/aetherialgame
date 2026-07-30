@@ -226,6 +226,10 @@ async function main() {
 
   engine.start();
   window.__VESSEL_READY = true;
+  // The chapter's coordinate truth, for tools/collision.mjs — every spawn,
+  // checkpoint and debug warp resolves from this table, so auditing it is
+  // auditing the real thing.
+  window.__VESSEL_WAYPOINTS = WAYPOINTS;
   window.__VESSEL_API = {
     engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
     encounter, boss: encounter.boss, arena: encounter.arena, alignment, pigeon, STATE,
