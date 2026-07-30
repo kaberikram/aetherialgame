@@ -9,9 +9,11 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rollupOptions: {
       output: {
-        manualChunks: {
-          three: ['three'],
-          rapier: ['@dimforge/rapier3d-compat'],
+        // Vite 8 bundles with Rolldown, whose manualChunks only accepts a
+        // function — the classic Rollup object-map form throws at build time.
+        manualChunks(id) {
+          if (id.includes('node_modules/three')) return 'three';
+          if (id.includes('node_modules/@dimforge/rapier3d-compat')) return 'rapier';
         },
       },
     },
