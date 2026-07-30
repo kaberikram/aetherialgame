@@ -51,11 +51,16 @@ export const ZONE_PROFILES = {
     // Near-zero ambient. The jade water is doing the lighting, not a fill light.
     ambient: { sky: 0x14332a, ground: 0x030705, intensity: 0.22 },
     // Red and blue crushed in the shadows, green held: olive-black, not
-    // grey-black. High contrast so the dark BETWEEN the water channels stays
-    // genuinely dark instead of washing to a uniform mid-tone.
+    // grey-black.
+    //
+    // Contrast and vignette were 1.16 and 0.42, chasing "the dark between the
+    // water must stay dark". They overshot: the warm olive-brown wall the
+    // board paints across most of its frame was being crushed to featureless
+    // black over roughly seventy percent of ours. Near-zero ambient is a
+    // lighting instruction, not an instruction to delete the walls.
     grade: {
       lift: [-0.010, 0.004, -0.012], gamma: [1.06, 0.96, 1.10], gain: [0.86, 1.06, 0.90],
-      saturation: 1.06, contrast: 1.16, vignette: 0.42, grain: 0.012,
+      saturation: 1.06, contrast: 1.07, vignette: 0.30, grain: 0.012,
     },
     reverb: 'cavern',
   },
@@ -65,12 +70,18 @@ export const ZONE_PROFILES = {
     // Deliberately almost nothing: the star is the only light that matters,
     // and hard falloff into black is the whole look of the concept board.
     ambient: { sky: 0x161d2e, ground: 0x04050a, intensity: 0.20 },
-    // The most aggressive grade in the chapter. Desaturated to slate, indigo
-    // in the lift, and the highest contrast anywhere, because "hard falloff
-    // into black" is a contrast instruction before it is a lighting one.
+    // Desaturated to slate with indigo in the lift.
+    //
+    // Contrast and vignette were 1.24 and 0.48 — the most aggressive grade in
+    // the chapter — on the reading that "hard falloff into black" is a
+    // contrast instruction. The board says otherwise: its falloff happens
+    // inside a NARROW value band, from a pale flowstone wall down to dark
+    // steps, and the star hangs against that pale wall rather than against
+    // black. At 1.24 the wall's authored pale value never reached the screen
+    // and the room read as a void with a dot in it.
     grade: {
       lift: [0.004, 0.002, 0.020], gamma: [1.02, 1.01, 0.94], gain: [0.92, 0.95, 1.10],
-      saturation: 0.72, contrast: 1.24, vignette: 0.48, grain: 0.014,
+      saturation: 0.72, contrast: 1.08, vignette: 0.28, grain: 0.014,
     },
     reverb: 'chamber',
   },

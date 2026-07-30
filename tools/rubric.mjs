@@ -382,7 +382,12 @@ async function main() {
           return info;
         }, moveId);
 
-        await poseCamera(page, { pos: [0, -20.4, -68], look: [0, -22.0, -80], fov: 46 });
+        // Angled slightly UP, not down. The slam's tell is both arms straight
+        // overhead, and a camera that looks down on the boss puts that pose
+        // behind its own torso — the one attack whose telegraph is supposed to
+        // be the easiest to read was the hardest, because of the reference
+        // camera rather than the animation.
+        await poseCamera(page, { pos: [0, -22.4, -66], look: [0, -20.4, -80], fov: 52 });
         await page.waitForTimeout(400);
         await capture(page, `boss-${moveId}`);
         const p = await perf(page);
@@ -440,9 +445,26 @@ async function main() {
               const h = form.home;
               api.player.respawn({ x: h.x, y: h.y - 1.2, z: h.z }, Math.PI);
             }, branch);
-            await pump(220); // the take, and the chamber's reaction settling
+            await pump(120); // the take itself
             const alignment = await bp.evaluate(() => window.__VESSEL_API.state.alignment);
             if (alignment === 0) throw new Error(`star-${branch}: the choice never resolved`);
+
+            // The chamber's reaction rides a damp in the arena's RENDER-rate
+            // update, not the fixed step, so pumping fixed steps does not
+            // advance it. It has roughly a one-second time constant, so a
+            // capture taken a second after the choice catches the room around
+            // 60% of the way to its target and the two branches look far more
+            // alike than they end up. This waits in wall-clock instead, and
+            // then asserts the star actually arrived.
+            // Tested against `starBase`, the damped value, not against
+            // `star.intensity` — the latter has the star's flicker multiplied
+            // in and never settles on anything.
+            await bp.waitForFunction((b) => {
+              const api = window.__VESSEL_API;
+              const base = api.arena.baseStarIntensity;
+              const want = b === 'light' ? base * 1.85 : base * 0.24;
+              return Math.abs(api.arena.starBase - want) < base * 0.08;
+            }, branch, { timeout: 90000 });
           }
 
           await poseCamera(bp, TRIPTYCH.camera);

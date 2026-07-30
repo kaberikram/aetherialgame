@@ -140,11 +140,16 @@ export class PostChain {
       // Threshold above 1.0 keeps this genuinely emissive-keyed: at this point
       // in the chain the buffer is still linear HDR, so lit stone sits under
       // 1.0 and only the jade water, the star and the sky disc break through.
+      //
+      // It was 0.95, which is not above 1.0 — and the gap was not academic. A
+      // polished specular hit crossed it, so the sword bloomed like a magic
+      // weapon in the one frame PROJECT.md specifies as "cold steel, no glow,
+      // no rarity colour."
       const bloom = new UnrealBloomPass(
         new THREE.Vector2(width, height),
         quality.bloomStrength ?? 0.7,
         0.62,
-        0.95
+        1.06
       );
       this.composer.addPass(bloom);
       this.passes.bloom = bloom;

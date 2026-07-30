@@ -374,13 +374,30 @@ export class StarChamberArena {
       this.starBase = THREE.MathUtils.damp(this.starBase ?? this.baseStarIntensity, target, 0.9, dt);
       this.star.intensity = this.starBase * f;
       const ratio = this.starBase / this.baseStarIntensity;
-      this.starCore.scale.setScalar(f * (0.6 + ratio * 0.5));
 
-      const glowScale = 0.5 + ratio * 0.7;
+      // The star's VISIBLE size and brightness track the reaction nearly
+      // proportionally, not with a large constant floor.
+      //
+      // These used to read `0.6 + ratio * 0.5` and friends, which meant that
+      // when dark wings dropped the light to a quarter of base, the star on
+      // screen only shrank by a third and kept most of its flare. The light in
+      // the room changed; the thing the player is looking at did not. "The
+      // chamber darkens and the star dims" is one sentence in PROJECT.md, and
+      // half of it was not happening.
+      this.starCore.scale.setScalar(f * (0.18 + ratio * 0.92));
+
+      // Distance fade. The flare sprite is fog-exempt and unattenuated, so
+      // from the Green Vein — fifty metres and two beats away, through the
+      // corridor — it was out-shining that zone's own near-zero-ambient
+      // identity before the player had ever seen the pool.
+      const dist = this.starGroup.getWorldPosition(_v).distanceTo(this.rendererObj.camera.position);
+      const near = 1 - THREE.MathUtils.smoothstep(dist, 42, 70);
+
+      const glowScale = (0.10 + ratio * 0.95) * near;
       this.starHaloSmall.material.opacity = 0.95 * glowScale * f;
       this.starHaloBig.material.opacity = 0.34 * glowScale * f;
-      this.starFlare.material.opacity = Math.min(1, 0.85 * glowScale) * f;
-      this.starFlare.scale.setScalar(7.5 * (0.82 + ratio * 0.28));
+      this.starFlare.material.opacity = Math.min(1, 0.9 * glowScale) * f;
+      this.starFlare.scale.setScalar(7.5 * (0.35 + ratio * 0.68));
       this.starFlare.material.rotation += dt * 0.045;
 
       // The in-scattering and the far-wall fill both ride the same ratio, so

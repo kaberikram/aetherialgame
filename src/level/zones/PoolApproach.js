@@ -121,9 +121,15 @@ export function build(ctx) {
   // on in the chamber's own establishing shot, so their value has to sit
   // inside the room's palette instead of reading as a lit-white plaza dropped
   // in front of it.
+  // The gradient starts cool and dark, not at full-brightness candi. Beginning
+  // at white meant the first steps — the ones the player stands on for the
+  // room's establishing shot, filling the bottom third of frame — were the
+  // brightest surface anywhere in a room whose palette is desaturated indigo
+  // and slate. The transition from Green Vein's warm stone happens in the
+  // Green Vein, not on the chamber's own floor.
   for (let i = 0; i < 7; i++) {
     const t = i / 6;
-    const tint = new THREE.Color(mixc(1, 0.30, t), mixc(1, 0.335, t), mixc(1, 0.375, t));
+    const tint = new THREE.Color(mixc(0.56, 0.24, t), mixc(0.60, 0.27, t), mixc(0.68, 0.33, t));
     ctx.box(
       new THREE.Vector3(15 - i * 0.5, 1.0, 4.2),
       new THREE.Vector3(0, top - drop * i - 0.5, -54 - i * 3.4),
