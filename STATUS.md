@@ -53,34 +53,39 @@ Debug: **F1** stats · **F2** hitboxes and frame data · **F3** state inspector 
 | 4 Blockout | done | Whole chapter, void to oculus, SEA architecture kit |
 | 5 Wings | done | Seven-slot alignment, the choice, chamber reaction, flight |
 | 6 Companion | done | Pigeon, barks, and the three tells |
-| 7 Art pass | **not started** | |
-| 8 Motion & sound | **not started** | |
+| 7 Art pass | **first pass done** | Pipeline, materials, volumetrics, water, three zones |
+| 8 Motion & sound | **audio done** | Synthesis + reverb + footsteps; IK, ragdoll, VFX outstanding |
 | 9 Rubric & perf | **not started** | |
 | 10 Playable link | **not started** | |
 
 ## What is NOT done, in priority order
 
-1. **Post-processing chain (Phase 7).** There is no `EffectComposer` at all —
-   no bloom, SSAO, tone-mapped grading beyond the renderer's ACES, no
-   volumetrics, no per-zone LUT. `render/PostChain.js` is named in
-   `docs/INTERFACES.md` and does not exist yet. This is the single biggest
-   visual gap: the emissive water, the star and the daylight shaft are all
-   authored expecting bloom, and currently read flatter than intended.
-2. **Procedural material textures (Phase 7).** `render/procedural/textures.js`
-   has a working `materialSet()` that generates tiling albedo/normal/roughness
-   from FBM, and nothing calls it. Every surface is currently flat-coloured
-   `MeshStandardMaterial`, which fails the rubric's "no default-material
-   surfaces" line.
-3. **Audio (Phase 8).** `EVENTS.SFX` is emitted from roughly forty places with
-   correct ids and positions, and nothing listens. `audio/AudioSystem.js` does
-   not exist. The wiring is done; the synthesis is not.
-4. **Water rendering (Phase 7).** The Star Chamber pool is a vertex-displaced
-   translucent plane with ripple propagation on boss breach. No SSR, no
-   refraction, no depth-based murk.
-5. **Foot IK, ragdoll, root-motion polish (Phase 8).**
-6. **Performance (Phase 9).** No instancing, no LODs, no atlasing. 324 draw
-   calls and 88k triangles — inside the 1,500 draw-call budget, but the CPU
-   frame time has not been measured on real hardware.
+1. **The critic's outstanding defects (Phase 7, second loop).** One critic pass
+   has run against the concept boards. The chapter is not finished until its
+   ranked failures are closed — the loop is capped at five passes per zone and
+   has used one.
+2. **Foot IK, ragdoll, root-motion polish, VFX (Phase 8).** The audio half of
+   Phase 8 is done; the motion half is not. Wing-burst VFX, water displacement
+   beyond the existing boss breach, and impact effects are outstanding.
+3. **Performance (Phase 9).** No instancing, no LODs, no atlasing. Draw calls
+   peak at 821 of the 1,500 budget, which is fine — but triangles roughly
+   doubled during the art pass, to ~350k at the heaviest vantage, and that is
+   the number to watch. Nothing has been measured on hardware with a GPU.
+4. **Packaged playable build (Phase 10).**
+5. **The character himself.** The player mesh is still an untextured grey-white
+   mannequin in every frame. It is the most conspicuous unfinished thing in the
+   captures, and it belongs to the alignment system's seven slots rather than
+   to any zone, so no zone agent owned it.
+
+## Known structural issue, worked around rather than fixed
+
+The Green Vein's walkable floor is built from 8m boxes that each sample
+`GREEN_VEIN_FLOOR(z)` at their own centre, so the boxes and the continuous
+function disagree by up to ~0.55m away from those centres. Anything that
+derives its height from the function rather than from the boxes will float or
+sink. The water ribbon works around this with a local helper that mirrors the
+box selection. Fixing it properly means rebuilding collision geometry that has
+already passed its pacing gate, so it was deliberately left alone.
 
 ## Performance caveat
 
