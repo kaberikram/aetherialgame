@@ -71,10 +71,17 @@ function courses(u, v, rows, cols, gap = 0.06) {
  * correctly when the geometry is procedural.
  *
  * Dominant-axis rather than full triplanar: one sample per map instead of
- * three, with a seam only where a surface passes through 45°. The architecture
- * here is boxes and cylinders, so that seam almost never lands on screen, and
- * three texture fetches per map on every stone surface is not worth buying it
- * back.
+ * three, with a seam where a surface passes through 45°. For the boxy
+ * architecture this table exists to clothe, that seam almost never lands on
+ * screen, and three texture fetches per map on every stone surface is not
+ * worth buying it back.
+ *
+ * The known exception: a full cylinder the player can see from every angle
+ * puts that seam on screen at all four diagonal azimuths, where it reads as a
+ * moiré diamond under raking light. The Pagoda Well's 58m shaft is the one
+ * surface in the chapter shaped like that, and it uses its own cylindrically
+ * mapped material instead. If a second such surface appears, give this
+ * function a triplanar branch rather than working around it twice.
  *
  * The projection happens per fragment, and the normal map's tangent frame is
  * rebuilt from the same expression — deriving the frame from the mesh's

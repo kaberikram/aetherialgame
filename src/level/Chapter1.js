@@ -111,10 +111,16 @@ export class Chapter1 {
   update(dt) {
     // The jade water breathes. Two out-of-phase sines per channel so the whole
     // cavern does not pulse as one organism.
+    //
+    // The multiplier rides the intensity the zone authored rather than
+    // replacing it. Assigning the raw factor — as this did — pinned every
+    // emissive surface in the chapter to the same narrow band whatever its
+    // material asked for, which meant a zone could only control its glow by
+    // baking the restraint into its textures.
     const t = performance.now() * 0.001;
     for (const e of this.emissives) {
-      const f = 1.25 + Math.sin(t * 0.62 + e.phase) * 0.28 + Math.sin(t * 1.37 + e.phase * 2) * 0.12;
-      e.mesh.material.emissiveIntensity = f;
+      const f = 1 + Math.sin(t * 0.62 + e.phase) * 0.22 + Math.sin(t * 1.37 + e.phase * 2) * 0.10;
+      e.mesh.material.emissiveIntensity = e.base * f;
     }
     for (const [i, l] of this.lights.entries()) {
       if (l.color.g > 0.7 && l.color.r < 0.4) {

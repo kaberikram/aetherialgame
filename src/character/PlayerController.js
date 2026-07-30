@@ -219,6 +219,24 @@ export class PlayerController {
     }
   }
 
+  /**
+   * What is under the feet right now, for footstep audio.
+   *
+   * Water wins over the zone because the arena's depth field is the thing the
+   * player is actually standing in, and a stone footfall while shin-deep in
+   * the pool is the kind of detail that breaks a room.
+   */
+  currentSurface() {
+    if ((this.waterDepth ?? 0) > 0.5) return 'waterDeep';
+    if ((this.waterDepth ?? 0) > 0.06) return 'water';
+    switch (this.engine.resolve('state').zone) {
+      case 'greenVein': return 'wetStone';
+      case 'starChamber': return 'wetStone';
+      case 'pagodaWell': return 'stone';
+      default: return 'gravel';
+    }
+  }
+
   #onAnimEvent(ev) {
     switch (ev.type) {
       case 'iframes-on': this.invulnerable = true; break;
@@ -233,6 +251,13 @@ export class PlayerController {
         break;
       case 'criticalHit':
         if (this.criticalTarget) this.damage?.resolveCritical(this, this.criticalTarget);
+        break;
+      case 'foot':
+        this.bus.emit(EVENTS.PLAYER_FOOTSTEP, {
+          foot: ev.foot,
+          surface: this.currentSurface(),
+          position: this.position,
+        });
         break;
       case 'sfx': this.bus.emit(EVENTS.SFX, { id: ev.id, position: this.position }); break;
       case 'swing': this.bus.emit(EVENTS.SFX, { id: ev.id, position: this.position }); break;

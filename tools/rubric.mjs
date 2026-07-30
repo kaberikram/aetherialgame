@@ -32,7 +32,11 @@ import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const OUT = path.join(ROOT, 'captures', 'rubric');
-const PORT = 5197;
+// --port lets parallel zone agents each run their own capture without
+// fighting over one dev server.
+const PORT = Number(process.argv.includes('--port')
+  ? process.argv[process.argv.indexOf('--port') + 1]
+  : 5197);
 const CHROME = ['/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-1194/chrome-linux/chrome']
   .find((p) => existsSync(p));
 
@@ -60,6 +64,45 @@ const argv = process.argv.slice(2);
 const flag = (n, d = null) => {
   const i = argv.indexOf(`--${n}`);
   return i >= 0 ? (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : true) : d;
+};
+
+/**
+ * The concept boards, identified by inspection.
+ *
+ * The folder is a dump of everything that was pinned during design, so it also
+ * contains a character sheet, a tone reference and one image that is not
+ * concept art at all. Naming them here stops the critic from trying to match a
+ * rendered frame against a photo of a runway show.
+ */
+const BOARDS = {
+  'green-vein': {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 11.35.34 PM.png',
+    reads: 'One broad still body of water, glow concentrated at its RIM and in serpentine flow lines rather than across the surface. Warm olive-brown darks, not neutral black. A pale cave opening in the background as the lightest value. Stalagmites as silhouettes standing in the water.',
+  },
+  'star-chamber': {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 11.36.07 PM.png',
+    reads: 'Nearly monochrome desaturated blue in a NARROW value band. The back cave wall is one of the lightest values, painted as vertical flowstone drapes; the water is mid-dark and matte; the darkest values are the frame edges and the dais steps. The star is small and high with a hard 8-point flare, against a light wall — not against black. The dais is a low circular stepped platform just above the waterline.',
+  },
+  pagoda: {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 10.55.57 PM.png',
+    reads: 'Irregular organic oculus with vegetation overhanging a ragged rim. Well walls dark olive-green with visible ledge structure, not black. The candi is the lightest solid value in frame. Soft rounded clustered vegetation. A saturated blue moat ring. The figure is roughly 8px against a 700px tower.',
+  },
+  'boss-framing': {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 11.35.23 PM.png',
+    reads: 'Composition reference only: player a dark silhouette in the foreground, boss large and centred standing in shallow water, stalactite wall behind. NOTE the violet palette here is not the Chapter 1 Star Chamber palette, and the figure is not the Drowned as PROJECT.md specifies it. Judge framing, not design.',
+  },
+  'wings-light': {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 10.54.15 PM.png',
+    reads: 'The light-aligned winged form: four wings in layered feather structure, crested helm, flowing drapery over armoured legs. Garuda/Kinnara, not a European angel.',
+  },
+  tone: {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 11.35.07 PM.png',
+    reads: 'Rendering-language reference for the whole chapter: heavy grain, near-total black, a single bright source, everything else falling away.',
+  },
+  'not-concept-art': {
+    file: 'ConceptArtReferences/Screenshot 2026-07-29 at 11.34.46 PM.png',
+    reads: 'Swept into the folder by accident. Not a reference. Ignore.',
+  },
 };
 
 /**
@@ -123,9 +166,15 @@ const VANTAGES = [
     name: 'pagoda-scale',
     zone: 'pagodaWell',
     board: 'pagoda',
+    // Framed to match the board: ground level, straight on, tower centred with
+    // the oculus above it. Shot from the FAR side of the well looking back —
+    // the near side is the approach corridor (z −96 to −116, 5m radius around
+    // x=0), and a camera on axis there is inside the tunnel looking at its own
+    // ceiling. This stands 22m out from the tower on the well floor, which is
+    // inside the shaft's 24m radius and clear of the corridor entirely.
     note: 'The board ratio: a person is a few pixels against the temple.',
-    setup: (api) => api.player.respawn({ x: 22, y: -24.6, z: -112 }, -Math.PI / 2),
-    camera: { pos: [30, -20, -104], look: [0, -10, -126], fov: 56 },
+    setup: (api) => api.player.respawn({ x: 13, y: -24.6, z: -112 }, -Math.PI / 2),
+    camera: { pos: [14, -22.4, -110], look: [0, -6, -126], fov: 60 },
   },
   {
     name: 'pagoda-oculus',
@@ -359,16 +408,27 @@ async function main() {
         process.stdout.write(`› star-${branch} … `);
         const bp = await bootPage(browser);
         try {
+          // The forms take 3.4s of SIMULATION to rise before the choice is
+          // live, and the simulation advances at most five fixed steps per
+          // rendered frame. On software GL that is minutes of wall-clock for
+          // a few seconds of game. So the sim is driven directly: pause the
+          // engine and pump `step()`, which runs one fixed step and no render.
+          // Same code path the game uses, without waiting on a rasteriser.
+          const pump = (frames) => bp.evaluate((n) => {
+            const engine = window.__VESSEL;
+            engine.setPaused(true);
+            for (let i = 0; i < n; i++) engine.stepOnce();
+            engine.setPaused(false);
+          }, frames);
+
           await bp.evaluate(() => {
             const api = window.__VESSEL_API;
             api.intro.skip();
             api.encounter.forceWingChoice();
           });
-          // The forms take 3.4s to rise before the choice is live at all.
-          await bp.waitForFunction(
-            () => window.__VESSEL_API.encounter.wingChoice?.phase === 'offered',
-            { timeout: 60000 }
-          );
+          await pump(260); // past the 3.4s rise
+          const phase = await bp.evaluate(() => window.__VESSEL_API.encounter.wingChoice?.phase);
+          if (phase !== 'offered') throw new Error(`star-${branch}: choice stuck in "${phase}"`);
 
           if (branch !== 'before') {
             // Walking into a form is how the choice is taken — there is no
@@ -380,11 +440,9 @@ async function main() {
               const h = form.home;
               api.player.respawn({ x: h.x, y: h.y - 1.2, z: h.z }, Math.PI);
             }, branch);
-            await bp.waitForFunction(
-              () => window.__VESSEL_API.state.alignment !== 0,
-              { timeout: 30000 }
-            );
-            await bp.waitForTimeout(TRIPTYCH.settle);
+            await pump(220); // the take, and the chamber's reaction settling
+            const alignment = await bp.evaluate(() => window.__VESSEL_API.state.alignment);
+            if (alignment === 0) throw new Error(`star-${branch}: the choice never resolved`);
           }
 
           await poseCamera(bp, TRIPTYCH.camera);
@@ -412,11 +470,7 @@ async function main() {
       }
     }
 
-    manifest.boards = {
-      'green-vein': 'ConceptArtReferences/',
-      'star-chamber': 'ConceptArtReferences/',
-      pagoda: 'ConceptArtReferences/',
-    };
+    manifest.boards = BOARDS;
     await writeFile(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
     const peak = Math.max(...manifest.shots.map((s) => s.perf.drawCalls));

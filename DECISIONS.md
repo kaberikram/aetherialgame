@@ -156,3 +156,100 @@ The body spawned 15m away after 5s, lit only by the player's falloff (~2% at tha
 
 ### D38. The pointer-capture click is spent
 A mousedown while the pointer is unlocked only captures the pointer; it no longer also registers as an attack. Auto-recenter is likewise gamepad-only now — a mouse user parks the camera deliberately, and a camera that drifts back on its own reads as the game wrestling the mouse away.
+
+
+---
+
+## P7 — Art pass
+
+### D39. The zones became separate files before any agent touched them
+`Chapter1.js` held all three environment zones and the shared material table in
+one 600-line file. Three art agents working in parallel on that file is the
+merge collision the phase split exists to prevent, so the zones were split into
+`level/zones/*.js` behind a `ZoneBuilder` context first, as a pure refactor with
+identical draw calls and triangles. Ownership after the split is disjoint by
+construction rather than by agreement.
+
+### D40. The shared pipeline was built before the zones, not beside them
+`PHASES.md` lists the rendering pipeline as a fourth parallel agent alongside
+the three zones. That ordering is wrong: the zones consume the pipeline, so if
+it lands after them every zone re-authors its lighting against an API that moved
+underneath it. It was built serially and its API frozen before the fan-out.
+
+### D41. Materials project their UVs from world space
+Generated geometry gets 0..1 UVs regardless of size, so a 64m floor slab and a
+0.6m step block sampled the same texture across the same range — masonry on the
+large one read as corrugation. Texel density is now a property of the world, not
+of the mesh. Dominant-axis projection rather than full triplanar: one texture
+fetch per map instead of three, with a seam only where a surface passes through
+45°, which on boxes and cylinders almost never lands on screen.
+
+The normal map's tangent frame is rebuilt from the same projected expression it
+samples with. Deriving the frame from the mesh's original UVs while sampling
+with another is the subtle version of this bug and shows up as lighting sliding
+across the surface rather than as anything obviously wrong.
+
+### D42. Volumetric occlusion is a bake, not the light's shadow map
+The daylight shaft needs light-space occlusion so the candi carves a real
+silhouette out of the beam. Three binds a directional light's shadow map as a
+`sampler2DShadow` with a compare function attached, which is a different type
+from the `sampler2D` a custom shader can read. Rather than fight that, the shaft
+renders the scene's depth from the light once at boot into its own RGBA-packed
+target. Every occluder in the well is static, so once is enough; the player and
+the pigeon do not carve rays out of the beam, which is a loss nobody notices.
+
+### D43. Volumetric ray bounds are analytic, not the proxy mesh's back face
+Marching from the camera to the fragment's back face is the obvious
+implementation and it fails twice. A closed cylinder's back face jumps from the
+side wall to the top cap, which draws a hard seam straight across the sky disc.
+A tapered proxy is smaller than the volume it stands for, so rays that pass
+through the volume find no fragment to shade and the proxy's own silhouette
+appears as a hard-edged cone across the frame. The proxy is now a bounding
+cylinder that only decides which pixels to shade; entry and exit come from an
+analytic ray-cylinder intersection, and the taper the player sees comes from the
+radial falloff.
+
+### D44. Scene depth is borrowed from the AO pass, one frame stale
+The water's murk and the volumetrics' occlusion both need scene depth. The AO
+pass already renders a normal-and-depth G-buffer every frame, so they sample
+that instead of adding a depth pre-pass. It is one frame behind — the AO pass
+runs after the scene containing the water — which is imperceptible on a soft
+volume and a depth fade, and free. When the post chain is off the getter returns
+null and both fall back to their non-depth path rather than failing.
+
+### D45. The rubric captures at 1600×900, not 1440p
+This container has no GPU. A software-rasterised 1440p frame in the Star Chamber
+takes tens of seconds, and the fixed-step simulation — capped at five sub-steps
+per rendered frame — then cannot finish a 3.4-second animation before the
+harness times out. Composition, value structure, palette and silhouette all
+survive the smaller frame, and the draw-call and triangle budgets it reports are
+resolution-independent, so nothing measured is weakened. `--size 2560` restores
+full resolution when there is time for it.
+
+### D46. Gameplay smoke scripts run at quality=low
+The smoke scripts assert that the game runs and that its states are reachable,
+which is not a rendering question. Under the full post chain on software GL the
+simulation falls far behind wall-clock, so a drive script waiting on an
+animation times out for reasons unrelated to the game. Frame quality is the
+rubric harness's job; the smoke harness now runs cheap and waits on conditions
+rather than sleeping for fixed durations.
+
+### D47. Every sound is synthesised, for the same reason every mesh is
+There are no audio files, consistent with D4. Each sound is a small graph of
+oscillators and filtered noise, which is less limiting than it sounds: a sword
+whiff IS a band of noise sweeping downward, and a stone footstep IS a short
+burst through a resonant filter. Per-zone reverb comes from generated impulse
+responses whose high end decays faster than the low, which is most of what makes
+a large stone room sound like stone rather than like a plate.
+
+The boss wind-up cues are distinguished by pitch DIRECTION, not timbre — rising
+for the lunge, falling for the sweep, rising-then-holding for the delayed strike
+that punishes panic-rolling. A player learns a direction far faster than a
+texture, and the delayed strike's cue tells the same lie its animation does.
+
+### D48. Footstep events are derived from gait phase, not authored per clip
+The gait cycles are generated from periodic functions of one phase variable, so
+the contacts are already known: the left thigh's swing is `sin(phase)`, which
+plants the left foot where phase crosses zero and the right half a cycle later.
+Placing the events by hand per clip is how they end up out of sync with the pose
+they are supposed to accompany.

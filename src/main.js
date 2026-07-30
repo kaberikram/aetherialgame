@@ -21,6 +21,7 @@ import { BossEncounter } from './level/BossEncounter.js';
 import { BossBar } from './ui/BossBar.js';
 import { VoidSequence } from './narrative/VoidSequence.js';
 import { Pigeon } from './companion/Pigeon.js';
+import { AudioSystem } from './audio/AudioSystem.js';
 import { HUD } from './ui/HUD.js';
 import { PauseMenu } from './ui/PauseMenu.js';
 import { DebugSystem } from './debug/DebugSystem.js';
@@ -131,6 +132,9 @@ async function main() {
   // Tell #2 needs to know where the star's light pools.
   pigeon.setStarRepulsor(encounter.arena.starGroup.position);
 
+  boot.step(86, 'sound');
+  const audio = engine.provide('audio', new AudioSystem(engine));
+
   const hud = new HUD(engine, player);
 
   // Damage lands on the player through events, so the controller never needs a
@@ -165,6 +169,7 @@ async function main() {
   engine.add(zones, STAGE.WORLD - 5);
   engine.add(encounter, STAGE.AI + 10);
   engine.add(checkpoints, STAGE.WORLD);
+  engine.add(audio, STAGE.AUDIO);
   engine.add(hud, STAGE.UI);
   engine.add(new BossBar(engine), STAGE.UI);
   engine.add(new PauseMenu(engine), STAGE.UI + 5);
@@ -224,7 +229,7 @@ async function main() {
   window.__VESSEL_API = {
     engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
     encounter, boss: encounter.boss, arena: encounter.arena, alignment, pigeon, STATE,
-    renderer, post, materials, quality,
+    renderer, post, materials, quality, audio,
   };
 }
 

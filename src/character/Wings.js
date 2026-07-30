@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { makeGlow } from '../render/procedural/textures.js';
 
+const _one = new THREE.Vector3(1, 1, 1);
+
 /**
  * The wings — the only slot Chapter 1 resolves.
  *
@@ -48,70 +50,113 @@ export function buildLightWings() {
 
   const gold = new THREE.MeshStandardMaterial({
     color: 0xc9a55e, roughness: 0.34, metalness: 0.78,
-    emissive: 0x6b4d18, emissiveIntensity: 0.55,
+    emissive: 0x6b4d18, emissiveIntensity: 0.30,
   });
   const darkWood = new THREE.MeshStandardMaterial({
     color: 0x241c14, roughness: 0.72, metalness: 0.12,
   });
+  // Emissive kept low deliberately. These feathers are lit by a real lamp, and
+  // a pale albedo plus a strong emissive plus that lamp plus bloom is four
+  // ways of saying "bright" stacked on one surface — the result is a white
+  // blob with no internal value, which is exactly the rubric's grayscale
+  // failure. The layered feather structure has to survive the light.
   const pale = new THREE.MeshStandardMaterial({
     color: 0xf2ead8, roughness: 0.46, metalness: 0.06,
-    emissive: 0xbfa877, emissiveIntensity: 0.9,
+    emissive: 0xbfa877, emissiveIntensity: 0.20,
   });
 
-  for (const side of [-1, 1]) {
-    const wing = new THREE.Group();
-    wing.name = side < 0 ? 'wing.R' : 'wing.L';
+  /**
+   * Two pairs, not one. The concept board shows a four-winged Garuda-derived
+   * form: a long primary pair and a shorter upper pair set behind and above.
+   * The upper pair is what stops the silhouette reading as a generic angel.
+   *
+   * Both pairs are named `wing.L`/`wing.R` so Alignment's flap animation drives
+   * them together; they fan from different origins, so they do not overlap.
+   */
+  const buildPair = ({ scale, offset, primaries, span }) => {
+    for (const side of [-1, 1]) {
+      const wing = new THREE.Group();
+      wing.name = side < 0 ? 'wing.R' : 'wing.L';
+      wing.position.copy(offset);
+      wing.scale.setScalar(scale);
 
-    // Arm bones of the wing: humerus out, radius forward, a hard elbow.
-    const parts = [];
-    const hum = new THREE.CylinderGeometry(0.055, 0.075, 0.62, 6);
-    hum.rotateZ(Math.PI / 2);
-    hum.translate(side * 0.31, 0, 0);
-    parts.push(hum);
-    const rad = new THREE.CylinderGeometry(0.038, 0.052, 0.72, 6);
-    rad.rotateZ(Math.PI / 2);
-    rad.rotateY(side * 0.45);
-    rad.translate(side * 0.94, 0.16, -0.14);
-    parts.push(rad);
-    const boneMesh = new THREE.Mesh(mergeGeometries(parts, false), darkWood);
-    boneMesh.castShadow = true;
-    wing.add(boneMesh);
+      // Arm bones of the wing: humerus out, radius forward, a hard elbow.
+      const parts = [];
+      const hum = new THREE.CylinderGeometry(0.055, 0.075, 0.62, 6);
+      hum.rotateZ(Math.PI / 2);
+      hum.translate(side * 0.31, 0, 0);
+      parts.push(hum);
+      const rad = new THREE.CylinderGeometry(0.038, 0.052, 0.72, 6);
+      rad.rotateZ(Math.PI / 2);
+      rad.rotateY(side * 0.45);
+      rad.translate(side * 0.94, 0.16, -0.14);
+      parts.push(rad);
+      const boneMesh = new THREE.Mesh(mergeGeometries(parts, false), darkWood);
+      boneMesh.castShadow = true;
+      wing.add(boneMesh);
 
-    // Ten primaries in a fan. Angular, not soft.
-    for (let i = 0; i < 10; i++) {
-      const t = i / 9;
-      const len = 1.72 - t * 0.62;
-      const feather = new THREE.Mesh(
-        featherGeometry(len, 0.20 - t * 0.05, 0.10),
-        i % 3 === 0 ? gold : pale
-      );
-      feather.position.set(side * (0.5 + t * 0.86), 0.06 + t * 0.16, -0.12 - t * 0.10);
-      feather.rotation.z = side * (-0.30 - t * 0.95);
-      feather.rotation.x = -0.16 - t * 0.14;
-      feather.rotation.y = side * (0.12 + t * 0.30);
-      feather.castShadow = true;
-      wing.add(feather);
+      // Feathers are baked into one geometry per material rather than kept as
+      // separate meshes. Nothing articulates below the wing group — the whole
+      // fan rotates together — so seventeen meshes per wing bought nothing and
+      // cost sixty-odd draw calls at the exact moment the chapter is trying to
+      // look its best.
+      const goldParts = [];
+      const paleParts = [];
+      const bake = (geo, pos, rot) => {
+        const m4 = new THREE.Matrix4().compose(
+          pos, new THREE.Quaternion().setFromEuler(rot), _one
+        );
+        return geo.applyMatrix4(m4);
+      };
+
+      // Primaries in a fan. Angular, not soft.
+      for (let i = 0; i < primaries; i++) {
+        const t = i / (primaries - 1);
+        const len = span - t * span * 0.36;
+        const geo = bake(
+          featherGeometry(len, 0.20 - t * 0.05, 0.10),
+          new THREE.Vector3(side * (0.5 + t * 0.86), 0.06 + t * 0.16, -0.12 - t * 0.10),
+          new THREE.Euler(-0.16 - t * 0.14, side * (0.12 + t * 0.30), side * (-0.30 - t * 0.95))
+        );
+        (i % 3 === 0 ? goldParts : paleParts).push(geo);
+      }
+
+      // Coverts: a shorter overlapping row that hides the roots.
+      for (let i = 0; i < 6; i++) {
+        const t = i / 5;
+        goldParts.push(bake(
+          featherGeometry(0.52 - t * 0.14, 0.13, 0.05),
+          new THREE.Vector3(side * (0.36 + t * 0.52), 0.13, 0.02),
+          new THREE.Euler(-0.42, 0, side * (-0.5 - t * 0.6))
+        ));
+      }
+
+      for (const [parts, mat] of [[goldParts, gold], [paleParts, pale]]) {
+        if (!parts.length) continue;
+        const mesh = new THREE.Mesh(mergeGeometries(parts, false), mat);
+        mesh.castShadow = true;
+        wing.add(mesh);
+      }
+
+      group.add(wing);
     }
+  };
 
-    // Coverts: a shorter overlapping row that hides the roots.
-    for (let i = 0; i < 6; i++) {
-      const t = i / 5;
-      const c = new THREE.Mesh(featherGeometry(0.52 - t * 0.14, 0.13, 0.05), gold);
-      c.position.set(side * (0.36 + t * 0.52), 0.13, 0.02);
-      c.rotation.z = side * (-0.5 - t * 0.6);
-      c.rotation.x = -0.42;
-      wing.add(c);
-    }
-
-    group.add(wing);
-  }
+  buildPair({ scale: 1, offset: new THREE.Vector3(0, 0, 0), primaries: 10, span: 1.72 });
+  buildPair({ scale: 0.62, offset: new THREE.Vector3(0, 0.42, -0.26), primaries: 7, span: 1.5 });
 
   // Real illumination. PROJECT.md says the light wings brighten the chamber,
   // so this is an actual light source, not an emissive texture.
-  const glow = new THREE.PointLight(0xffe6b0, 9, 16, 1.7);
-  glow.position.set(0, 0.2, -0.3);
+  //
+  // It sits BEHIND and ABOVE the feathers rather than inside them. At the old
+  // position it was ~0.2m from the primaries, and inverse-square at that range
+  // blew them to flat white while barely reaching the room it is supposed to
+  // brighten. Back here it rim-lights the feathers and the falloff has enough
+  // distance to do its actual job.
+  const glow = new THREE.PointLight(0xffe6b0, 9, 24, 1.35);
+  glow.position.set(0, 0.55, -0.85);
   group.add(glow);
-  group.add(makeGlow({ color: 0xffdca0, scale: 3.4, opacity: 0.30, power: 3.0 }));
+  group.add(makeGlow({ color: 0xffdca0, scale: 3.4, opacity: 0.18, power: 3.0 }));
 
   group.userData.light = glow;
   group.userData.variant = 'light';

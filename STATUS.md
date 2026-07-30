@@ -1,17 +1,24 @@
 # STATUS — where the build actually is
 
-Phases 0 through 6 of `PHASES.md` are built, verified and pushed. Phases 7
-through 10 are not started. This document is the honest handover.
+Phases 0 through 6 of `PHASES.md` are built, verified and pushed. Phase 7 (the
+art pass) and the audio half of Phase 8 are in progress. Phases 9 and 10 are
+not started. This document is the honest handover.
 
 ## Run it
 
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run smoke        # headless boot + perf check
+npm run smoke        # headless boot + perf check (runs at quality=low)
+npm run rubric       # deterministic 1600x900 capture set for the critic pass
 node tools/smoke.mjs --script walk --shot frame
+node tools/rubric.mjs --only greenVein --port 5301   # one zone, for a tight loop
 node tools/probe.mjs --skipIntro --keys "Digit3:80" "api.player.state"
 ```
+
+`?quality=off|low|medium|high` on the URL selects the render preset. The smoke
+harness uses `low` because it is testing whether the game runs, not how it
+looks; the rubric harness uses `high`. See `src/render/quality.js`.
 
 ## Controls
 

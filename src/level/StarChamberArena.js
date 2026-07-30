@@ -3,8 +3,60 @@ import { EVENTS } from '../core/EventBus.js';
 import { TUNING } from '../tuning.js';
 import { FILTERS } from '../physics/PhysicsWorld.js';
 import { makeGlow } from '../render/procedural/textures.js';
+import { createWater } from '../render/WaterMaterial.js';
+import { VolumetricGlow } from '../render/VolumetricShaft.js';
+import { votiveStupa } from './geometry/builders.js';
 
 const _v = new THREE.Vector3();
+
+/**
+ * A crisp radiating flare for the star, drawn straight into a canvas. The
+ * concept board's star is small and reads as intensely bright because of an
+ * eight-point burst around a hard little core, not because the room around
+ * it is pure black — `makeGlow`'s round halos give it a disc and a soft
+ * bloom, but nothing before this gave it the spikes.
+ */
+function starFlareTexture(size = 256) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const mid = size / 2;
+
+  const core = g.createRadialGradient(mid, mid, 0, mid, mid, size * 0.17);
+  core.addColorStop(0, 'rgba(255,255,255,1)');
+  core.addColorStop(0.55, 'rgba(255,255,255,0.75)');
+  core.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = core;
+  g.fillRect(0, 0, size, size);
+
+  g.globalCompositeOperation = 'lighter';
+  const spike = (angle, length, width, alpha) => {
+    g.save();
+    g.translate(mid, mid);
+    g.rotate(angle);
+    const grad = g.createLinearGradient(0, 0, length, 0);
+    grad.addColorStop(0, `rgba(255,255,255,${alpha})`);
+    grad.addColorStop(0.45, `rgba(255,255,255,${alpha * 0.28})`);
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(0, -width / 2);
+    g.lineTo(length, 0);
+    g.lineTo(0, width / 2);
+    g.closePath();
+    g.fill();
+    g.restore();
+  };
+
+  const long = size * 0.49;
+  const short = size * 0.30;
+  for (let i = 0; i < 4; i++) spike((i / 4) * Math.PI * 2, long, size * 0.030, 0.9);
+  for (let i = 0; i < 4; i++) spike((i / 4) * Math.PI * 2 + Math.PI / 4, short, size * 0.016, 0.65);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 /**
  * The flooded dais.
@@ -23,7 +75,12 @@ export class StarChamberArena {
     this.engine = engine;
     this.bus = engine.bus;
     this.physics = engine.resolve('physics');
-    this.scene = engine.resolve('renderer').scene;
+    this.rendererObj = engine.resolve('renderer');
+    this.scene = this.rendererObj.scene;
+    this.gl = this.rendererObj.renderer;
+    this.post = engine.resolve('post');
+    this.quality = engine.resolve('quality');
+    this.library = engine.resolve('materials');
     this.center = center.clone();
     this.radius = radius;
 
@@ -66,8 +123,12 @@ export class StarChamberArena {
   }
 
   build() {
-    const stone = new THREE.MeshStandardMaterial({ color: 0x5b5f66, roughness: 0.94, metalness: 0 });
-    const darkStone = new THREE.MeshStandardMaterial({ color: 0x43474d, roughness: 0.96, metalness: 0 });
+    // Dark, damp slate for everything the star's light actually lands on
+    // close up. The old flat mid-grey rendered near-white once the point
+    // light and bloom hit it — a room whose whole palette is desaturated
+    // indigo and slate cannot afford a bathroom-tile-bright floor.
+    const rim = this.library.get('wetRock');
+    const basin = this.library.get('silt');
 
     // --- the basin floor, matching depthAt() exactly ------------------------
     const segs = 48;
@@ -80,7 +141,7 @@ export class StarChamberArena {
       pos.setY(i, this.floorHeightAt(x + this.center.x, z + this.center.z) - this.center.y);
     }
     floor.computeVertexNormals();
-    const floorMesh = new THREE.Mesh(floor, darkStone);
+    const floorMesh = new THREE.Mesh(floor, basin);
     floorMesh.position.copy(this.center);
     floorMesh.receiveShadow = true;
     this.group.add(floorMesh);
@@ -91,7 +152,7 @@ export class StarChamberArena {
     for (let i = 0; i < 3; i++) {
       const r = this.radius + 0.5 + i * 1.15;
       const h = 0.34 + i * 0.30;
-      const ring = new THREE.Mesh(new THREE.CylinderGeometry(r, r + 0.5, h, 40, 1, true), stone);
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(r, r + 0.5, h, 40, 1, true), rim);
       ring.position.copy(this.center).setY(this.center.y + h / 2 - 0.05 + i * 0.30);
       ring.receiveShadow = true;
       ring.castShadow = true;
@@ -112,25 +173,23 @@ export class StarChamberArena {
       );
     }
 
-    // --- naga balustrade posts, SEA vocabulary even in grey box -------------
+    // --- votive stupas ringing the dais, SEA vocabulary even in grey box ---
+    // Corner markers, not balustrade posts: a box with a cone on it reads as
+    // a placeholder no matter how it is lit. These are unlit decoration only
+    // (no collider, same as the geometry they replace).
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2 + 0.4;
-      const r = this.radius + 2.3;
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.52, 2.4, 0.52), stone);
-      post.position.set(
+      const r = this.radius + 2.4;
+      const stupa = votiveStupa({ height: 1.7, baseWidth: 0.56, seed: i + 1 });
+      const mesh = new THREE.Mesh(stupa, rim);
+      mesh.position.set(
         this.center.x + Math.cos(a) * r,
-        this.center.y + 1.9,
+        this.center.y + 0.2,
         this.center.z + Math.sin(a) * r
       );
-      post.castShadow = true;
-      post.receiveShadow = true;
-      this.group.add(post);
-
-      const head = new THREE.Mesh(new THREE.ConeGeometry(0.38, 0.85, 5), stone);
-      head.position.copy(post.position).setY(post.position.y + 1.55);
-      head.rotation.y = -a;
-      head.castShadow = true;
-      this.group.add(head);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
     }
 
     this.#buildWater();
@@ -139,10 +198,19 @@ export class StarChamberArena {
   }
 
   /**
-   * Grey box water: a flat translucent plane with a vertex-displaced surface.
-   * Phase 7 replaces this with the real thing (SSR, refraction, depth murk).
-   * What matters now is that the SURFACE LINE is legible, because that line is
-   * how the player reads depth.
+   * The pool. PROJECT.md: "the pool is a character" — real depth-based murk,
+   * driven by the actual scene depth under the surface, so the shallow rim
+   * and the deep centre read differently before the player has taken a
+   * single step into either. And true refraction via transmission: this is
+   * the one surface in the chapter that earns the cost.
+   *
+   * The concept board is explicit that this water is almost dead flat —
+   * "unnaturally still" is the design note, and a bright mirror specular
+   * reads as the opposite of that. Roughness goes well past createWater's
+   * default and the ripple normal maps get scaled down hard, so the surface
+   * stays glassy-murky rather than shiny. The vertex displacement (ripples
+   * from a boss breach) is independent of the material — geometry carries
+   * the disturbance, the shader carries the depth and the colour.
    */
   #buildWater() {
     const geo = new THREE.CircleGeometry(this.radius + 1.2, 64);
@@ -150,13 +218,20 @@ export class StarChamberArena {
     this.waterGeometry = geo;
     this.waterBase = Float32Array.from(geo.attributes.position.array);
 
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x25313f,
-      roughness: 0.12,
-      metalness: 0.35,
-      transparent: true,
-      opacity: 0.82,
+    const mat = createWater({
+      quality: this.quality,
+      shallow: 0x33505e,
+      deep: 0x05080e,
+      murkDistance: 1.05,
+      minOpacity: 0.50,
+      maxOpacity: 0.97,
+      roughness: 0.55,
+      refract: true,
+      scrollSpeed: new THREE.Vector2(0.003, 0.005),
     });
+    // Kill the shine: real refraction stays, the mirror highlight does not.
+    mat.normalScale?.set(0.14, 0.14);
+
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(this.center).setY(this.waterLevel);
     mesh.receiveShadow = false;
@@ -164,7 +239,12 @@ export class StarChamberArena {
     this.water = mesh;
   }
 
-  /** One suspended star. It is the only light source the chamber has. */
+  /**
+   * One suspended star. It is the only light source the chamber has, and it
+   * drives three things every frame in `update()`: its own PointLight, the
+   * raymarched in-scattering around it, and a dim shadowless fill standing in
+   * for the bounce off the far cave wall the concept board paints pale.
+   */
   #buildStar() {
     const g = new THREE.Group();
     g.position.copy(this.center).setY(this.center.y + 9.5);
@@ -174,8 +254,24 @@ export class StarChamberArena {
       new THREE.MeshBasicMaterial({ color: 0xffffff })
     );
     g.add(core);
-    g.add(makeGlow({ color: 0xdfe8ff, scale: 2.2, opacity: 0.95, power: 2.2 }));
-    g.add(makeGlow({ color: 0x9db4e0, scale: 8.0, opacity: 0.34, power: 3.2 }));
+
+    const haloSmall = makeGlow({ color: 0xdfe8ff, scale: 2.2, opacity: 0.95, power: 2.2 });
+    g.add(haloSmall);
+    const haloBig = makeGlow({ color: 0x9db4e0, scale: 8.0, opacity: 0.34, power: 3.2 });
+    g.add(haloBig);
+
+    // The eight-point burst the concept board draws around the star.
+    const flare = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: starFlareTexture(256),
+      color: 0xeaf1ff,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      fog: false,
+    }));
+    flare.scale.setScalar(7.5);
+    g.add(flare);
 
     const light = new THREE.PointLight(0xdce8ff, 46, 42, 1.7);
     light.castShadow = true;
@@ -189,8 +285,40 @@ export class StarChamberArena {
     this.starGroup = g;
     this.star = light;
     this.starCore = core;
+    this.starHaloSmall = haloSmall;
+    this.starHaloBig = haloBig;
+    this.starFlare = flare;
     this.baseStarIntensity = light.intensity;
     this.starBase = light.intensity;
+
+    // Raymarched in-scattering. PROJECT.md rules out billboard fakes for this
+    // room, and `VolumetricGlow` existed but was never wired in here. No
+    // shadow sampling: the star hangs in open air with nothing between it and
+    // the player, so marching a shadow cube would cost a lot to prove there
+    // is nothing in the way.
+    this.starGlow = new VolumetricGlow({
+      center: g.position.clone(),
+      radius: 2.1,
+      steps: this.quality.volumetricSteps,
+      density: 0.42,
+      intensity: 1.1,
+      color: 0xd7e3ff,
+    });
+    this.scene.add(this.starGlow.mesh);
+    this.starGlowBaseIntensity = this.starGlow.uniforms.intensity.value;
+    this.starGlowBaseDensity = this.starGlow.uniforms.density.value;
+
+    // A dim, shadowless fill aimed at the far cave wall. Not a second key —
+    // it stands in for the baked bounce PROJECT.md's tech stack calls for
+    // (real-time GI is out of budget). The star's own hard falloff genuinely
+    // does not reach 25-30m back to the wall, and the concept board is
+    // unambiguous that the wall is one of the palest values in the frame.
+    // Tied to the star below so the wing choice still moves this, rather
+    // than leaving one part of the room as a fixed stage light.
+    this.wallFill = new THREE.PointLight(0x8ea3c6, 3.2, 50, 1.3);
+    this.wallFill.position.set(this.center.x, this.center.y + 13, this.center.z - 24);
+    this.scene.add(this.wallFill);
+    this.wallFillBase = this.wallFill.intensity;
   }
 
   /** Displacement written by the boss breaching. */
@@ -245,12 +373,35 @@ export class StarChamberArena {
       const target = this.star.userData.reactTarget ?? this.baseStarIntensity;
       this.starBase = THREE.MathUtils.damp(this.starBase ?? this.baseStarIntensity, target, 0.9, dt);
       this.star.intensity = this.starBase * f;
-      this.starCore.scale.setScalar(f * (0.6 + this.starBase / this.baseStarIntensity * 0.5));
-      const glowScale = 0.5 + (this.starBase / this.baseStarIntensity) * 0.7;
-      for (const c of this.starGroup.children) {
-        if (c.isSprite) c.material.opacity = c.scale.x > 4 ? 0.34 * glowScale : 0.95 * glowScale;
+      const ratio = this.starBase / this.baseStarIntensity;
+      this.starCore.scale.setScalar(f * (0.6 + ratio * 0.5));
+
+      const glowScale = 0.5 + ratio * 0.7;
+      this.starHaloSmall.material.opacity = 0.95 * glowScale * f;
+      this.starHaloBig.material.opacity = 0.34 * glowScale * f;
+      this.starFlare.material.opacity = Math.min(1, 0.85 * glowScale) * f;
+      this.starFlare.scale.setScalar(7.5 * (0.82 + ratio * 0.28));
+      this.starFlare.material.rotation += dt * 0.045;
+
+      // The in-scattering and the far-wall fill both ride the same ratio, so
+      // dark does not just dim the point light — the air stops glowing and
+      // the wall the light was bouncing off goes with it. Same room, two
+      // different rooms.
+      if (this.starGlow) {
+        this.starGlow.uniforms.intensity.value = this.starGlowBaseIntensity * ratio;
+        this.starGlow.uniforms.density.value = this.starGlowBaseDensity * (0.35 + ratio * 0.65);
       }
+      if (this.wallFill) this.wallFill.intensity = this.wallFillBase * (0.3 + ratio * 0.7);
     }
+
+    // Volumetric in-scattering and the water's scroll/depth both want the
+    // active camera and, when the post chain is running, the scene depth.
+    // The arena is built outside ZoneBuilder, so unlike the other zones it
+    // has to fetch those itself instead of Chapter1 handing them in.
+    const camera = this.rendererObj.camera;
+    const depth = this.post?.depthTexture ?? null;
+    this.starGlow?.update(dt, camera, depth);
+    this.water.material.userData.water.update(dt, camera, this.gl, depth);
   }
 
   /** Called by the player each step so movement can read the depth. */
@@ -267,5 +418,10 @@ export class StarChamberArena {
   dispose() {
     this.scene.remove(this.group);
     this.scene.remove(this.starGroup);
+    if (this.starGlow) {
+      this.scene.remove(this.starGlow.mesh);
+      this.starGlow.dispose();
+    }
+    if (this.wallFill) this.scene.remove(this.wallFill);
   }
 }
