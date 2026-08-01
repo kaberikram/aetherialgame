@@ -253,3 +253,65 @@ the contacts are already known: the left thigh's swing is `sin(phase)`, which
 plants the left foot where phase crosses zero and the right half a cycle later.
 Placing the events by hand per clip is how they end up out of sync with the pose
 they are supposed to accompany.
+
+### D49. `high` means "60fps on an M1", and `ultra` holds the art
+The quality ladder used to have `high` at the top, and it was tuned for looks:
+uncapped pixel ratio, live shadows, full-rate GTAO, water transmission, 32-step
+volumetrics. Measured against the target machine, that costs **ten full-scene
+geometry passes per frame** in the Star Chamber — six of them the star
+PointLight's shadow cube, one the sun, one GTAO's normal pre-pass, one the
+transmission backdrop, one the beauty pass — over 5.2 million pixels, because a
+13" M1 MacBook Pro reports 1440×900 at devicePixelRatio 2.
+
+`high` is now the shipping default and means "hold 60 on that machine":
+`pixelRatioCap 1.4`, baked shadows, AO at half resolution, no water
+transmission, 20 volumetric steps. `ultra` is byte-for-byte what `high` used to
+be, so `node tools/perf.mjs` running both levels IS the before/after for the
+whole pass. Measured: **10 scene passes → 2, fill 10.2× lower, 831 → 313 draw
+calls, 367k → 113k triangles.**
+
+`tools/rubric.mjs` moves to `ultra`. If the critic judged the art at the same
+level the performance work cuts, every cut would read as a visual regression it
+demands be undone — and worse, a future cut could quietly launder itself past a
+critic that had already been lowered to meet it.
+
+### D50. Shadow maps are baked once, not re-rendered every frame
+A shadow-casting PointLight is six full scene renders per frame, and there is
+exactly one in the game — in the room that also holds the boss fight. Every
+occluder that matters in this chapter is static stonework, so the maps are
+identical on frame two as on frame one. `Renderer.freezeShadows()` renders each
+one once and then sets `autoUpdate = false`.
+
+The cost is real and taken deliberately: dynamic casters stop writing into the
+maps, so the boss no longer casts a shadow on the dais. `ultra` keeps them live.
+If that reads as floating, the fix is a cheap projected contact shadow under the
+character, not six scene passes a frame.
+
+Timing is the part that is easy to get wrong. `VoidSequence.start()` hides the
+entire chapter group for the duration of the opening, so baking at boot would
+bake six empty cube faces and freeze them that way. The bake is hooked to
+`intro.onComplete`, which fires after `#restoreWorld()` on both the played and
+the skipped path.
+
+### D51. Frame time is measured on the target, not in the container
+Everything else in the performance pass is measured headlessly and exactly:
+scene passes, pixels per frame, draw calls, triangles — all hardware-
+independent. Frame time is not. This container renders through SwiftShader,
+where a single Star Chamber frame takes most of a second, so any millisecond
+figure it produces is a fact about the software rasteriser.
+
+So `tools/perf.mjs` reports the countable costs and refuses to report frame
+time, and `?bench` ships in the game itself: a fixed route through every zone
+with a fixed dwell, discarding the first 1.25s at each stop for shader
+compiles, reporting p50/p95 wall-clock frame time per zone. Judged on p95, not
+p50 — a game that averages 60 and dips to 40 four times a second does not feel
+like 60. It is a dynamic import, so it costs the shipping bundle nothing.
+
+### D52. Instancing is deferred, because the measurement says it is not the cost
+PROJECT.md budgets 1,500 draw calls. At `high` the heaviest vantage in the
+chapter submits **313**, and the busiest zone 113k triangles. Converting the
+repeated props to `InstancedMesh` would be optimising the one number that is
+already five times inside its budget, at the cost of touching every zone
+builder immediately after an art pass. The cut that mattered was fill, and it
+has been made. This stays queued for P9 and gets done if — and only if — `?bench`
+on real hardware says CPU submission, not fill, is the limit.

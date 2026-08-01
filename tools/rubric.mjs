@@ -41,6 +41,22 @@ const CHROME = ['/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-1194/chr
   .find((p) => existsSync(p));
 
 /**
+ * The critic captures at `ultra`, not at the shipping default.
+ *
+ * `high` was redefined to mean "60fps on an M1": baked shadows, capped pixel
+ * ratio, no water transmission, fewer volumetric steps. If the rubric captured
+ * at `high` too, every one of those cuts would show up as a visual regression
+ * the critic then demands be undone — and worse, a future performance cut
+ * could quietly launder itself past a critic that had already been lowered to
+ * meet it. `ultra` holds everything the art pass built, so the art is judged
+ * at full quality and the performance work is judged separately, by frame
+ * time on a real GPU.
+ */
+const QUALITY = process.argv.includes('--quality')
+  ? process.argv[process.argv.indexOf('--quality') + 1]
+  : 'ultra';
+
+/**
  * 1600×900 by default, not 1440p.
  *
  * The critic judges composition, value structure, palette and silhouette, and
@@ -276,7 +292,7 @@ async function bootPage(browser) {
   page.setDefaultNavigationTimeout(120000);
   page.setDefaultTimeout(120000);
   await page.addInitScript(() => { try { localStorage.clear(); } catch { /* first load */ } });
-  await page.goto(`http://localhost:${PORT}/?quality=high`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`http://localhost:${PORT}/?quality=${QUALITY}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__VESSEL_READY === true, { timeout: 90000 });
   await page.evaluate(() => {
     document.getElementById('debug-root').style.display = 'none';
@@ -330,7 +346,7 @@ async function main() {
     // The critic judges the rendered world, not the debug overlay or the HUD;
     // bootPage hides both.
     page = await bootPage(browser);
-    console.log(`  engine ready · ${WIDTH}×${HEIGHT} · quality=high`);
+    console.log(`  engine ready · ${WIDTH}×${HEIGHT} · quality=${QUALITY}`);
 
     for (const v of VANTAGES) {
       if (only && only !== true && v.zone !== only && v.name !== only) continue;

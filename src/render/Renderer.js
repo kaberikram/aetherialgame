@@ -16,8 +16,16 @@ import { TUNING } from '../tuning.js';
 export class Renderer {
   updateWhilePaused = true;
 
-  constructor(container, { antialias = true, pixelRatioCap = 2 } = {}) {
+  constructor(container, quality = {}) {
     this.container = container;
+    this.quality = quality;
+
+    // MSAA on the canvas is pure waste whenever the post chain is on: the
+    // composer renders into its own targets and the canvas only ever receives
+    // a fullscreen quad, so the multisampled buffer is allocated, paid for,
+    // and never resolved against any geometry. SMAA in the chain does the
+    // antialiasing instead.
+    const antialias = quality.post === false;
 
     this.renderer = new THREE.WebGLRenderer({
       antialias,
@@ -27,7 +35,13 @@ export class Renderer {
       // Needed so the smoke harness and the single-file build can screenshot.
       preserveDrawingBuffer: true,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap));
+
+    // Device pixel ratio is the single largest lever on a retina display and
+    // the easiest one to get wrong. An M1 reports DPR 2, so an uncapped
+    // renderer draws FOUR times the pixels — through a bloom mip chain, an AO
+    // pass and a volumetric raymarch. Capping near 1.4 and letting SMAA carry
+    // the edges costs far less than it looks like it should.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap ?? 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -103,6 +117,74 @@ export class Renderer {
     perf.drawCalls = info.render.calls;
     perf.triangles = info.render.triangles;
     perf.programs = info.programs?.length ?? 0;
+  }
+
+  /**
+   * Render every shadow map once, then stop.
+   *
+   * A shadow-casting PointLight is six full scene renders per frame — the
+   * suspended star was costing six of the ten scene passes in the room that
+   * also holds the boss fight. Every occluder that matters here is static
+   * stonework, so the maps are identical on frame two as on frame one.
+   *
+   * The cost is that moving things no longer cast into them: the boss's
+   * shadow on the dais is gone. That is a real loss, taken deliberately —
+   * a contact shadow under a character is cheap to add back, and six scene
+   * passes a frame is not cheap to keep.
+   *
+   * Call once, after everything that casts a shadow exists.
+   */
+  freezeShadows() {
+    let frozen = 0;
+    this.scene.traverse((o) => {
+      if (!o.isLight || !o.castShadow || !o.shadow) return;
+      // needsUpdate survives autoUpdate:false for exactly one pass, which is
+      // what bakes the map; three clears the flag itself afterwards.
+      o.shadow.needsUpdate = true;
+      o.shadow.autoUpdate = false;
+      frozen++;
+    });
+    return frozen;
+  }
+
+  /**
+   * What this frame actually costs, in the terms that decide frame time.
+   *
+   * Frame time itself cannot be measured in the build container — there is no
+   * GPU — but these are hardware-independent and they are what the frame time
+   * is made of.
+   */
+  renderStats() {
+    const pr = this.renderer.getPixelRatio();
+    const w = Math.round(window.innerWidth * pr);
+    const h = Math.round(window.innerHeight * pr);
+
+    let scenePasses = 1; // the beauty pass
+    const shadows = [];
+    let transmissive = 0;
+    this.scene.traverse((o) => {
+      // Every transmissive material makes three render the scene again into a
+      // backdrop target before it can refract through it. One pool = one pass.
+      if (o.isMesh && o.visible && o.material?.transmission > 0) transmissive++;
+      if (!o.isLight || !o.castShadow || !o.shadow) return;
+      const live = o.shadow.autoUpdate !== false;
+      const faces = o.isPointLight ? 6 : 1;
+      shadows.push({ type: o.type, faces, live });
+      if (live) scenePasses += faces;
+    });
+    scenePasses += transmissive;
+    if (this.composer?.passes?.gtao) scenePasses += 1;  // normal pre-pass
+
+    return {
+      pixelRatio: pr,
+      resolution: `${w}x${h}`,
+      pixelsPerFrame: w * h,
+      scenePasses,
+      shadowLights: shadows,
+      transmissive,
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+    };
   }
 
   dispose() {

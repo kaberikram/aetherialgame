@@ -62,7 +62,7 @@ async function main() {
 
   const viewport = document.getElementById('viewport');
   const quality = engine.provide('quality', resolveQuality());
-  const renderer = engine.provide('renderer', new Renderer(viewport));
+  const renderer = engine.provide('renderer', new Renderer(viewport, quality));
   renderer.attach(engine);
 
   boot.step(11, 'post chain');
@@ -153,7 +153,25 @@ async function main() {
     cameraRig.snap({ yaw: intro.landingFacing + Math.PI });
     zones.snapTo('descent');
     hud.setBarsVisible(true);
+    bakeShadows();
   };
+
+  // Every occluder that matters in this chapter is static stonework, so the
+  // shadow maps are identical on frame two as on frame one. Baking them once
+  // removes the star's six-face shadow cube and the sun's directional pass
+  // from every subsequent frame — six of the ten scene passes the Star
+  // Chamber was paying for. `ultra` keeps them live.
+  //
+  // Timing matters and is easy to get wrong: `intro.start()` hides the entire
+  // chapter group for the duration of the void, so baking at boot would bake
+  // six empty cube faces and freeze them that way. It has to happen once the
+  // world is visible, which is exactly when the intro hands over.
+  let shadowsBaked = false;
+  function bakeShadows() {
+    if (shadowsBaked || quality.liveShadows) return;
+    shadowsBaked = true;
+    renderer.freezeShadows();
+  }
 
   // --- module registration, ordered by STAGE ------------------------------
   engine.add(input, STAGE.INPUT);
@@ -225,6 +243,19 @@ async function main() {
   boot.done();
 
   engine.start();
+
+  // ?bench — the one number this repo cannot measure for itself. Costs the
+  // shipping build a URLSearchParams read and a branch.
+  if (new URLSearchParams(location.search).has('bench')) {
+    const { Bench } = await import('./debug/Bench.js');
+    const bench = new Bench(engine, {
+      player, cameraRig, intro, waypoints: WAYPOINTS, renderer, quality,
+    });
+    engine.add(bench, STAGE.DEBUG + 10);
+    bench.start();
+    window.__VESSEL_BENCH_RUN = bench;
+  }
+
   window.__VESSEL_READY = true;
   // The chapter's coordinate truth, for tools/collision.mjs — every spawn,
   // checkpoint and debug warp resolves from this table, so auditing it is

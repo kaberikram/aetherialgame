@@ -201,8 +201,13 @@ export class StarChamberArena {
    * The pool. PROJECT.md: "the pool is a character" — real depth-based murk,
    * driven by the actual scene depth under the surface, so the shallow rim
    * and the deep centre read differently before the player has taken a
-   * single step into either. And true refraction via transmission: this is
-   * the one surface in the chapter that earns the cost.
+   * single step into either. And true refraction via transmission — but only
+   * where the budget allows it. `MeshPhysicalMaterial` transmission renders
+   * the whole scene again into a backdrop target, so this one surface costs a
+   * full extra geometry pass every frame. It is the only surface in the
+   * chapter that would earn that, and it still only gets it on `ultra`;
+   * `high` falls back to createWater's depth-driven murk, which carries the
+   * "unnaturally still, can't see the bottom" read on its own.
    *
    * The concept board is explicit that this water is almost dead flat —
    * "unnaturally still" is the design note, and a bright mirror specular
@@ -226,7 +231,7 @@ export class StarChamberArena {
       minOpacity: 0.50,
       maxOpacity: 0.97,
       roughness: 0.55,
-      refract: true,
+      refract: this.quality.refractWater,
       scrollSpeed: new THREE.Vector2(0.003, 0.005),
     });
     // Kill the shine: real refraction stays, the mirror highlight does not.
