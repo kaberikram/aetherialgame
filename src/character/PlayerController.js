@@ -219,6 +219,24 @@ export class PlayerController {
     }
   }
 
+  /**
+   * What is under the feet right now, for footstep audio.
+   *
+   * Water wins over the zone because the arena's depth field is the thing the
+   * player is actually standing in, and a stone footfall while shin-deep in
+   * the pool is the kind of detail that breaks a room.
+   */
+  currentSurface() {
+    if ((this.waterDepth ?? 0) > 0.5) return 'waterDeep';
+    if ((this.waterDepth ?? 0) > 0.06) return 'water';
+    switch (this.engine.resolve('state').zone) {
+      case 'greenVein': return 'wetStone';
+      case 'starChamber': return 'wetStone';
+      case 'pagodaWell': return 'stone';
+      default: return 'gravel';
+    }
+  }
+
   #onAnimEvent(ev) {
     switch (ev.type) {
       case 'iframes-on': this.invulnerable = true; break;
@@ -233,6 +251,13 @@ export class PlayerController {
         break;
       case 'criticalHit':
         if (this.criticalTarget) this.damage?.resolveCritical(this, this.criticalTarget);
+        break;
+      case 'foot':
+        this.bus.emit(EVENTS.PLAYER_FOOTSTEP, {
+          foot: ev.foot,
+          surface: this.currentSurface(),
+          position: this.position,
+        });
         break;
       case 'sfx': this.bus.emit(EVENTS.SFX, { id: ev.id, position: this.position }); break;
       case 'swing': this.bus.emit(EVENTS.SFX, { id: ev.id, position: this.position }); break;
@@ -308,7 +333,10 @@ export class PlayerController {
     cam.getWorldDirection(_v);
     _v.y = 0;
     _v.normalize();
-    _v2.copy(_v).cross(_up).multiplyScalar(-1);
+    // Camera-right is forward × up. The extra ×−1 that used to be here made it
+    // camera-LEFT, so drifting with D in the opening moved the wisp the wrong
+    // way — the very first control input the game ever asks for.
+    _v2.copy(_v).cross(_up);
 
     _flat.set(0, 0, 0).addScaledVector(_v, move.y).addScaledVector(_v2, move.x);
     const vertical = (this.input.actions[ACTION.JUMP].held ? 1 : 0)
@@ -681,13 +709,25 @@ export class PlayerController {
     this.anim.play('jumpAir', { fadeFrames: 4 });
   }
 
+  /**
+   * Turn stick/WASD intent into a world facing, relative to the camera.
+   *
+   * The offset SUBTRACTS. Movement resolves to `(sin(yaw), cos(yaw))`, so a
+   * facing of `camYaw` walks along the camera's forward — but camera-right is
+   * forward rotated MINUS ninety degrees about Y, not plus. Adding the offset
+   * instead of subtracting it sent A and D the wrong way, which is what made
+   * the controls feel inverted.
+   *
+   * Verified by `tools/controls.mjs`, which drives each key and projects the
+   * resulting displacement onto the camera's own basis.
+   */
   #cameraRelativeYaw(move) {
     const cam = this.renderer.camera;
     cam.getWorldDirection(_v);
     _v.y = 0;
     _v.normalize();
     const camYaw = Math.atan2(_v.x, _v.z);
-    return camYaw + Math.atan2(move.x, move.y);
+    return camYaw - Math.atan2(move.x, move.y);
   }
 
   // -------------------------------------------------------------- facing

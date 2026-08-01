@@ -156,3 +156,162 @@ The body spawned 15m away after 5s, lit only by the player's falloff (~2% at tha
 
 ### D38. The pointer-capture click is spent
 A mousedown while the pointer is unlocked only captures the pointer; it no longer also registers as an attack. Auto-recenter is likewise gamepad-only now — a mouse user parks the camera deliberately, and a camera that drifts back on its own reads as the game wrestling the mouse away.
+
+
+---
+
+## P7 — Art pass
+
+### D39. The zones became separate files before any agent touched them
+`Chapter1.js` held all three environment zones and the shared material table in
+one 600-line file. Three art agents working in parallel on that file is the
+merge collision the phase split exists to prevent, so the zones were split into
+`level/zones/*.js` behind a `ZoneBuilder` context first, as a pure refactor with
+identical draw calls and triangles. Ownership after the split is disjoint by
+construction rather than by agreement.
+
+### D40. The shared pipeline was built before the zones, not beside them
+`PHASES.md` lists the rendering pipeline as a fourth parallel agent alongside
+the three zones. That ordering is wrong: the zones consume the pipeline, so if
+it lands after them every zone re-authors its lighting against an API that moved
+underneath it. It was built serially and its API frozen before the fan-out.
+
+### D41. Materials project their UVs from world space
+Generated geometry gets 0..1 UVs regardless of size, so a 64m floor slab and a
+0.6m step block sampled the same texture across the same range — masonry on the
+large one read as corrugation. Texel density is now a property of the world, not
+of the mesh. Dominant-axis projection rather than full triplanar: one texture
+fetch per map instead of three, with a seam only where a surface passes through
+45°, which on boxes and cylinders almost never lands on screen.
+
+The normal map's tangent frame is rebuilt from the same projected expression it
+samples with. Deriving the frame from the mesh's original UVs while sampling
+with another is the subtle version of this bug and shows up as lighting sliding
+across the surface rather than as anything obviously wrong.
+
+### D42. Volumetric occlusion is a bake, not the light's shadow map
+The daylight shaft needs light-space occlusion so the candi carves a real
+silhouette out of the beam. Three binds a directional light's shadow map as a
+`sampler2DShadow` with a compare function attached, which is a different type
+from the `sampler2D` a custom shader can read. Rather than fight that, the shaft
+renders the scene's depth from the light once at boot into its own RGBA-packed
+target. Every occluder in the well is static, so once is enough; the player and
+the pigeon do not carve rays out of the beam, which is a loss nobody notices.
+
+### D43. Volumetric ray bounds are analytic, not the proxy mesh's back face
+Marching from the camera to the fragment's back face is the obvious
+implementation and it fails twice. A closed cylinder's back face jumps from the
+side wall to the top cap, which draws a hard seam straight across the sky disc.
+A tapered proxy is smaller than the volume it stands for, so rays that pass
+through the volume find no fragment to shade and the proxy's own silhouette
+appears as a hard-edged cone across the frame. The proxy is now a bounding
+cylinder that only decides which pixels to shade; entry and exit come from an
+analytic ray-cylinder intersection, and the taper the player sees comes from the
+radial falloff.
+
+### D44. Scene depth is borrowed from the AO pass, one frame stale
+The water's murk and the volumetrics' occlusion both need scene depth. The AO
+pass already renders a normal-and-depth G-buffer every frame, so they sample
+that instead of adding a depth pre-pass. It is one frame behind — the AO pass
+runs after the scene containing the water — which is imperceptible on a soft
+volume and a depth fade, and free. When the post chain is off the getter returns
+null and both fall back to their non-depth path rather than failing.
+
+### D45. The rubric captures at 1600×900, not 1440p
+This container has no GPU. A software-rasterised 1440p frame in the Star Chamber
+takes tens of seconds, and the fixed-step simulation — capped at five sub-steps
+per rendered frame — then cannot finish a 3.4-second animation before the
+harness times out. Composition, value structure, palette and silhouette all
+survive the smaller frame, and the draw-call and triangle budgets it reports are
+resolution-independent, so nothing measured is weakened. `--size 2560` restores
+full resolution when there is time for it.
+
+### D46. Gameplay smoke scripts run at quality=low
+The smoke scripts assert that the game runs and that its states are reachable,
+which is not a rendering question. Under the full post chain on software GL the
+simulation falls far behind wall-clock, so a drive script waiting on an
+animation times out for reasons unrelated to the game. Frame quality is the
+rubric harness's job; the smoke harness now runs cheap and waits on conditions
+rather than sleeping for fixed durations.
+
+### D47. Every sound is synthesised, for the same reason every mesh is
+There are no audio files, consistent with D4. Each sound is a small graph of
+oscillators and filtered noise, which is less limiting than it sounds: a sword
+whiff IS a band of noise sweeping downward, and a stone footstep IS a short
+burst through a resonant filter. Per-zone reverb comes from generated impulse
+responses whose high end decays faster than the low, which is most of what makes
+a large stone room sound like stone rather than like a plate.
+
+The boss wind-up cues are distinguished by pitch DIRECTION, not timbre — rising
+for the lunge, falling for the sweep, rising-then-holding for the delayed strike
+that punishes panic-rolling. A player learns a direction far faster than a
+texture, and the delayed strike's cue tells the same lie its animation does.
+
+### D48. Footstep events are derived from gait phase, not authored per clip
+The gait cycles are generated from periodic functions of one phase variable, so
+the contacts are already known: the left thigh's swing is `sin(phase)`, which
+plants the left foot where phase crosses zero and the right half a cycle later.
+Placing the events by hand per clip is how they end up out of sync with the pose
+they are supposed to accompany.
+
+### D49. `high` means "60fps on an M1", and `ultra` holds the art
+The quality ladder used to have `high` at the top, and it was tuned for looks:
+uncapped pixel ratio, live shadows, full-rate GTAO, water transmission, 32-step
+volumetrics. Measured against the target machine, that costs **ten full-scene
+geometry passes per frame** in the Star Chamber — six of them the star
+PointLight's shadow cube, one the sun, one GTAO's normal pre-pass, one the
+transmission backdrop, one the beauty pass — over 5.2 million pixels, because a
+13" M1 MacBook Pro reports 1440×900 at devicePixelRatio 2.
+
+`high` is now the shipping default and means "hold 60 on that machine":
+`pixelRatioCap 1.4`, baked shadows, AO at half resolution, no water
+transmission, 20 volumetric steps. `ultra` is byte-for-byte what `high` used to
+be, so `node tools/perf.mjs` running both levels IS the before/after for the
+whole pass. Measured: **10 scene passes → 2, fill 10.2× lower, 831 → 313 draw
+calls, 367k → 113k triangles.**
+
+`tools/rubric.mjs` moves to `ultra`. If the critic judged the art at the same
+level the performance work cuts, every cut would read as a visual regression it
+demands be undone — and worse, a future cut could quietly launder itself past a
+critic that had already been lowered to meet it.
+
+### D50. Shadow maps are baked once, not re-rendered every frame
+A shadow-casting PointLight is six full scene renders per frame, and there is
+exactly one in the game — in the room that also holds the boss fight. Every
+occluder that matters in this chapter is static stonework, so the maps are
+identical on frame two as on frame one. `Renderer.freezeShadows()` renders each
+one once and then sets `autoUpdate = false`.
+
+The cost is real and taken deliberately: dynamic casters stop writing into the
+maps, so the boss no longer casts a shadow on the dais. `ultra` keeps them live.
+If that reads as floating, the fix is a cheap projected contact shadow under the
+character, not six scene passes a frame.
+
+Timing is the part that is easy to get wrong. `VoidSequence.start()` hides the
+entire chapter group for the duration of the opening, so baking at boot would
+bake six empty cube faces and freeze them that way. The bake is hooked to
+`intro.onComplete`, which fires after `#restoreWorld()` on both the played and
+the skipped path.
+
+### D51. Frame time is measured on the target, not in the container
+Everything else in the performance pass is measured headlessly and exactly:
+scene passes, pixels per frame, draw calls, triangles — all hardware-
+independent. Frame time is not. This container renders through SwiftShader,
+where a single Star Chamber frame takes most of a second, so any millisecond
+figure it produces is a fact about the software rasteriser.
+
+So `tools/perf.mjs` reports the countable costs and refuses to report frame
+time, and `?bench` ships in the game itself: a fixed route through every zone
+with a fixed dwell, discarding the first 1.25s at each stop for shader
+compiles, reporting p50/p95 wall-clock frame time per zone. Judged on p95, not
+p50 — a game that averages 60 and dips to 40 four times a second does not feel
+like 60. It is a dynamic import, so it costs the shipping bundle nothing.
+
+### D52. Instancing is deferred, because the measurement says it is not the cost
+PROJECT.md budgets 1,500 draw calls. At `high` the heaviest vantage in the
+chapter submits **313**, and the busiest zone 113k triangles. Converting the
+repeated props to `InstancedMesh` would be optimising the one number that is
+already five times inside its budget, at the cost of touching every zone
+builder immediately after an art pass. The cut that mattered was fill, and it
+has been made. This stays queued for P9 and gets done if — and only if — `?bench`
+on real hardware says CPU submission, not fill, is the limit.

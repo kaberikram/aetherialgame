@@ -89,12 +89,24 @@ export class CameraRig {
     this.camera.updateMatrixWorld(true);
   }
 
-  fixedUpdate(dt) {
-    if (!this.enabled) return;
+  /**
+   * Apply one frame of look input.
+   *
+   * Called from `update()`, at display rate, NOT from `fixedUpdate()`. The
+   * simulation is 60Hz on purpose and gameplay input stays there, but
+   * quantising the camera to 60Hz on a 120Hz display stair-steps every mouse
+   * movement, and that reads as roughness no amount of smoothing hides.
+   *
+   * `look` is "positive x turns right, positive y tilts up" (see InputSystem).
+   * Both subtract here because the rig's angles describe where the CAMERA sits
+   * relative to the pivot, not where the view points: sitting further round to
+   * the left is what turns the view right, and sitting lower is what tilts the
+   * view up.
+   */
+  #applyLook(dt) {
     const c = TUNING.camera;
-    const look = this.input.look;
-
-    if (Math.abs(look.x) > 0.0001 || Math.abs(look.y) > 0.0001) {
+    const look = this.input.consumeLook(dt);
+    if (Math.abs(look.x) > 1e-6 || Math.abs(look.y) > 1e-6) {
       this.yaw -= look.x;
       this.pitch -= look.y;
       this.idleTime = 0;
@@ -102,6 +114,10 @@ export class CameraRig {
       this.idleTime += dt;
     }
     this.pitch = THREE.MathUtils.clamp(this.pitch, c.pitchMin, c.pitchMax);
+  }
+
+  fixedUpdate(dt) {
+    if (!this.enabled) return;
 
     if (this.lockTarget) {
       this.#updateLocked(dt);
@@ -174,6 +190,8 @@ export class CameraRig {
     if (!this.enabled) return;
     const c = TUNING.camera;
     const p = this.player;
+
+    this.#applyLook(dt);
 
     _pivot.copy(p.position);
     _pivot.y += c.height + (this.lockTarget ? this.lockPivotLift : 0);

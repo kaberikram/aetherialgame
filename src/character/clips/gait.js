@@ -85,7 +85,16 @@ export function makeGait(id, frames, p) {
     push('head', k(f, { r: [-lean * headStabilise, 0, 0], e }));
   }
 
-  return clip(id, frames, { loop: true }, tracks);
+  // Foot contacts, derived rather than authored. The left thigh's swing is
+  // sin(phase), so the left foot is planted where phase crosses zero and the
+  // right half a cycle later — which is where the audio has to land, and
+  // hand-placing them per clip is how they end up out of sync with the pose.
+  const events = [
+    { frame: 1, type: 'foot', foot: 'L' },
+    { frame: Math.round(frames / 2), type: 'foot', foot: 'R' },
+  ];
+
+  return clip(id, frames, { loop: true, events }, tracks);
 }
 
 /**

@@ -185,6 +185,9 @@ export const TUNING = {
       lookCurveExponent: 2.1,
       triggerPressThreshold: 0.42,
       triggerReleaseThreshold: 0.28,
+      // The pad's own setting. It used to read the keyboard's, which meant a
+      // player could not invert one scheme without inverting the other.
+      invertY: false,
     },
     kbm: {
       // Keyboard has no analog magnitude, so walk is a modifier rather than a

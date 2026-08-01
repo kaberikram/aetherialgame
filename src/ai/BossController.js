@@ -151,6 +151,39 @@ export class BossController {
     this.mesh.visible = true;
   }
 
+  /**
+   * Debug: hold the boss at one frame of one move.
+   *
+   * The rubric asks whether a paused wind-up is nameable, and answering that
+   * honestly means posing the exact frame the frame data calls the tell —
+   * not whichever frame the fight happened to be on when the screenshot fired.
+   * `tools/rubric.mjs` drives this.
+   *
+   * @param {string} moveId a key of BOSS_MOVES
+   * @param {number} [frame] defaults to the move's own peak wind-up
+   */
+  debugPose(moveId, frame = null) {
+    const move = BOSS_MOVES[moveId];
+    if (!move) throw new Error(`debugPose: no boss move "${moveId}"`);
+    // One frame before the hitboxes open: the last moment the player still has
+    // to read it, which is the only frame worth judging readability on.
+    const at = frame ?? Math.max(0, move.startup - 1);
+
+    this.alive = true;
+    this.engaged = true;
+    this.mesh.visible = true;
+    this.submerged = false;
+    this.phase = move.phase.includes(2) ? 2 : 1;
+    this.state = STATE.ATTACK;
+    this.currentMove = move;
+    this.moveFrame = at;
+    this.#closeHitboxes();
+
+    this.anim.play(move.clip, { fadeFrames: 0 });
+    this.anim.fixedUpdate(at / 60);
+    return { moveId, frame: at, tell: move.tell };
+  }
+
   // ------------------------------------------------------------------ loop
 
   fixedUpdate(dt) {

@@ -9,7 +9,10 @@
     "build": "vite build",
     "preview": "vite preview --port 4173",
     "smoke": "node tools/smoke.mjs",
-    "rubric": "node tools/rubric.mjs"
+    "rubric": "node tools/rubric.mjs",
+    "perf": "node tools/perf.mjs",
+    "controls": "node tools/controls.mjs",
+    "collision": "node tools/collision.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",

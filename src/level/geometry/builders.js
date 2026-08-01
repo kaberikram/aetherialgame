@@ -341,3 +341,279 @@ export function speleothems({ count = 24, radius = 14, length = 4, up = false, s
   }
   return mergeGeometries(parts, false);
 }
+
+/**
+ * A votive stupa: a squat plinth, tapering drum, bell and harmika — the same
+ * finial vocabulary as `candiTower`'s crown, at corner-marker scale. Built for
+ * the Star Chamber's dais rim, whose grey-boxed corners were a bare cone on a
+ * box and read as placeholder rather than temple furniture.
+ *
+ * `seed` nudges proportions a little so eight of them in a ring do not read
+ * as eight copies of one asset.
+ */
+export function votiveStupa({ height = 1.6, baseWidth = 0.6, seed = 1 } = {}) {
+  const n = fbm(seed * 1.7 + 4, seed * 0.6 + 1, { octaves: 2, frequency: 2, seed: 211 });
+  const h = height * (0.92 + n * 0.16);
+  const w = baseWidth * (0.9 + n * 0.2);
+  const parts = [];
+
+  const plinth = new THREE.BoxGeometry(w * 1.6, h * 0.14, w * 1.6);
+  plinth.translate(0, h * 0.07, 0);
+  parts.push(plinth);
+
+  const step = new THREE.BoxGeometry(w * 1.25, h * 0.10, w * 1.25);
+  step.translate(0, h * 0.14 + h * 0.05, 0);
+  parts.push(step);
+
+  const drum = new THREE.CylinderGeometry(w * 0.32, w * 0.46, h * 0.38, 8);
+  drum.translate(0, h * 0.19 + h * 0.19, 0);
+  parts.push(drum);
+
+  const bell = new THREE.SphereGeometry(w * 0.36, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.62);
+  bell.translate(0, h * 0.57 + w * 0.10, 0);
+  parts.push(bell);
+
+  const harmika = new THREE.BoxGeometry(w * 0.30, h * 0.09, w * 0.30);
+  harmika.translate(0, h * 0.57 + w * 0.24, 0);
+  parts.push(harmika);
+
+  const spire = new THREE.ConeGeometry(w * 0.07, h * 0.16, 6);
+  spire.translate(0, h * 0.57 + w * 0.24 + h * 0.13, 0);
+  parts.push(spire);
+
+  return mergeGeometries(parts, false);
+}
+
+/**
+ * A broad, winding body of still water — a jade lake threading a cave floor,
+ * not a rectangular channel. Each bank is jittered independently so the
+ * waterline reads as an irregular natural edge rather than a straight quad;
+ * width is keyframed per anchor so the body can taper narrow and open into a
+ * lake, the way the Green Vein concept board does; the cross-section dips
+ * gently toward the centre so the surface is never a dead-flat card.
+ *
+ * UVs: `u` runs 0..1 across the width — 0 and 1 are the two banks, 0.5 the
+ * centreline — so a material can key a rim/edge gradient directly off it.
+ * `v` is real arc length in metres, for tiling detail at a scale that means
+ * something regardless of how long the body runs.
+ *
+ * @param {{x:number,z:number,width:number}[]} anchors centreline keyframes
+ * @param {(z:number)=>number} floorY the floor height function this body sits
+ *   on. If the actual walkable floor is a run of flat, stepped segments
+ *   rather than a smooth ramp, pass a function that mirrors those steps, not
+ *   the continuous slope — sampling the smooth version per vertex will drift
+ *   away from the real floor by however much the steps and the slope
+ *   disagree, and this body is broad enough that the drift is visible: parts
+ *   of it float, parts of it sink under the opaque floor and vanish. Height
+ *   is resampled from this function at every vertex's ACTUAL x/z, not
+ *   inherited from the centreline curve, so it stays correct regardless of
+ *   how the curve smooths the path in between.
+ */
+export function waterBody({
+  anchors,
+  floorY,
+  lift = 0.1,
+  dip = 0.05,
+  segments = 100,
+  radial = 8,
+  edgeNoise = 0.45,
+  waveHeight = 0.04,
+  seed = 5,
+} = {}) {
+  // The centreline curve only shapes X/Z. Baking the real (possibly stepped)
+  // floor height into its anchors would hand computeFrenetFrames a jagged
+  // vertical path with a hard step at every anchor, which is exactly the
+  // kind of shape that destabilises a Frenet frame; flat and let the floor
+  // function supply Y per vertex, independently, below.
+  const pts = anchors.map((a) => new THREE.Vector3(a.x, 0, a.z));
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const frames = curve.computeFrenetFrames(segments, false);
+  const totalLen = curve.getLength();
+
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = curve.getPointAt(t);
+    const B = frames.binormals[Math.min(i, segments - 1)];
+    const arc = t * totalLen;
+
+    // Width is keyframed per anchor and lerped by the same proportion the
+    // centreline curve advances through its control points.
+    const fIdx = t * (anchors.length - 1);
+    const ia = Math.min(anchors.length - 2, Math.floor(fIdx));
+    const lt = fIdx - ia;
+    const width = THREE.MathUtils.lerp(anchors[ia].width, anchors[ia + 1].width, lt);
+
+    // Independent noise per bank: the two edges wander out of phase with
+    // each other, which is what keeps the width from reading as a uniform
+    // taper and makes it read as an eroded, natural edge instead.
+    const nL = fbm(t * 11, 1.7, { seed, octaves: 3, frequency: 3.4, period: 4 });
+    const nR = fbm(t * 11, 6.3, { seed: seed + 17, octaves: 3, frequency: 3.4, period: 4 });
+    const halfL = (width / 2) * (0.7 + nL * edgeNoise);
+    const halfR = (width / 2) * (0.7 + nR * edgeNoise);
+    const wob = (fbm(t * 15, 3.1, { seed: seed + 5, octaves: 2, frequency: 5, period: 5 }) - 0.5) * waveHeight;
+
+    for (let j = 0; j <= radial; j++) {
+      const u = j / radial;
+      const side = u * 2 - 1;
+      const off = THREE.MathUtils.lerp(-halfL, halfR, u);
+      const cross = 1 - side * side; // 1 at the centreline, 0 at both banks
+
+      const x = p.x + B.x * off;
+      const z = p.z + B.z * off;
+      const y = floorY(z) + lift + wob - dip * cross;
+      positions.push(x, y, z);
+      uvs.push(u, arc);
+    }
+  }
+
+  for (let i = 0; i < segments; i++) {
+    for (let j = 0; j < radial; j++) {
+      const a = i * (radial + 1) + j;
+      const b = a + radial + 1;
+      indices.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * A clumped mass of foliage: several overlapping subdivided icospheres,
+ * flattened and jittered, so the silhouette reads as a rounded mound of leaves
+ * rather than a single faceted shard. Subdivision level 1 (not 0) is what
+ * keeps individual lumps from reading as gemstones at close range.
+ */
+export function mossClump({ count = 9, radius = 1.5, spread = 1.1, flatten = 0.6, seed = 90 } = {}) {
+  const parts = [];
+  for (let i = 0; i < count; i++) {
+    const n1 = fbm(i * 1.9, 0, { seed });
+    const n2 = fbm(i * 2.7, 1, { seed });
+    const n3 = fbm(i * 3.3, 2, { seed });
+    const a = n1 * Math.PI * 2;
+    const r = Math.sqrt(n2) * spread;
+    const s = radius * (0.42 + n3 * 0.75);
+    const lump = new THREE.IcosahedronGeometry(s, 1);
+    // Irregularise each lump so the cluster doesn't read as identical balls.
+    const pos = lump.attributes.position;
+    for (let v = 0; v < pos.count; v++) {
+      const nn = fbm(pos.getX(v) * 1.3 + i, pos.getY(v) * 1.3 + pos.getZ(v), { seed: seed + 5, octaves: 2 });
+      const k = 1 + (nn - 0.5) * 0.30;
+      pos.setXYZ(v, pos.getX(v) * k, pos.getY(v) * k, pos.getZ(v) * k);
+    }
+    lump.scale(1, flatten + n2 * 0.3, 1);
+    lump.computeVertexNormals();
+    lump.translate(Math.cos(a) * r, s * flatten * 0.35 + (n1 - 0.5) * 0.25, Math.sin(a) * r);
+    parts.push(lump);
+  }
+  return mergeGeometries(parts, false);
+}
+
+/**
+ * The irregular, foliage-broken rim of an oculus opening: a ring of chunky,
+ * noise-jittered boulder lumps at a radius that wobbles around the mean, not
+ * a lathed torus. The concept board's opening is a ragged ellipse eaten into
+ * by clumped growth, not an engineered porthole — a perfect ring reads as the
+ * latter no matter how it is lit.
+ *
+ * `radius` is the MEAN radius. Individual lumps land at `radius * (1 +/- jag)`,
+ * so the opening the sky is glimpsed through stays the same size on average
+ * while its outline stops being a circle.
+ */
+export function oculusRim({ radius = 21, thickness = 3.2, segments = 26, jaggedness = 0.30, droop = 2.0, seed = 15 } = {}) {
+  const parts = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const n = fbm(Math.cos(a) * 2 + 4, Math.sin(a) * 2 + 4, { seed, octaves: 3, frequency: 2.1, period: 8 });
+    const rr = radius * (1 + (n - 0.5) * jaggedness);
+    const dip = (fbm(Math.cos(a) * 3 + 1, Math.sin(a) * 3 + 1, { seed: seed + 3, period: 8 }) - 0.5) * droop;
+    const s = thickness * (0.55 + n * 0.6);
+    const chunk = new THREE.IcosahedronGeometry(s, 1);
+    chunk.scale(1.35, 0.62, 1.35);
+    chunk.rotateY(a * 2.7);
+    chunk.translate(Math.cos(a) * rr, dip, Math.sin(a) * rr);
+    parts.push(chunk);
+  }
+  return mergeGeometries(parts, false);
+}
+
+/**
+ * A walkable ribbon whose surface follows a height FUNCTION exactly.
+ *
+ * The Green Vein's floor used to be a run of 8m boxes, each sampling its
+ * height once at its own centre — a staircase standing in for a slope. The
+ * collider and `GREEN_VEIN_FLOOR` therefore disagreed by up to half a metre
+ * away from those centres, so anything that derived its height from the
+ * function (the water, the stalagmites at the waterline) either floated above
+ * the floor or sank through it, and the zone carried a local workaround to
+ * paper over the difference. This samples the function per vertex instead, so
+ * there is nothing to disagree with.
+ *
+ * A skirt hangs from the edges so the banks read as rock with thickness rather
+ * than as a sheet of paper seen edge-on.
+ *
+ * @param {(z:number)=>number} floorY   surface height at a given z
+ * @param {(z:number)=>number} widthAt  full width at a given z
+ * @param {(z:number)=>number} offsetAt centre x at a given z
+ */
+export function slopedFloor({
+  fromZ, toZ, floorY, widthAt, offsetAt = () => 0,
+  segments = 56, skirt = 1.6,
+}) {
+  const positions = [];
+  const indices = [];
+  const uvs = [];
+
+  const rows = segments + 1;
+  const cols = 2; // one quad across; the surface is flat side to side
+  for (let i = 0; i < rows; i++) {
+    const t = i / segments;
+    const z = fromZ + (toZ - fromZ) * t;
+    const y = floorY(z);
+    const half = widthAt(z) / 2;
+    const cx = offsetAt(z);
+    positions.push(cx - half, y, z, cx + half, y, z);
+    uvs.push(0, t, 1, t);
+  }
+  for (let i = 0; i < segments; i++) {
+    const a = i * cols;
+    const b = a + 1;
+    const c = a + cols;
+    const d = c + 1;
+    indices.push(a, c, b, b, c, d);
+  }
+
+  // Skirts: two vertical strips hanging from the outer edges.
+  const base = positions.length / 3;
+  for (let i = 0; i < rows; i++) {
+    const t = i / segments;
+    const z = fromZ + (toZ - fromZ) * t;
+    const y = floorY(z);
+    const half = widthAt(z) / 2;
+    const cx = offsetAt(z);
+    positions.push(cx - half, y, z, cx - half, y - skirt, z);
+    positions.push(cx + half, y, z, cx + half, y - skirt, z);
+    uvs.push(0, t, 0.1, t, 1, t, 0.9, t);
+  }
+  for (let i = 0; i < segments; i++) {
+    const l = base + i * 4;
+    indices.push(l, l + 1, l + 4, l + 1, l + 5, l + 4);         // left skirt
+    const r = l + 2;
+    indices.push(r, r + 4, r + 1, r + 1, r + 4, r + 5);         // right skirt
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}

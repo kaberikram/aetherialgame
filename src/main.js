@@ -3,6 +3,9 @@ import { Engine, STAGE } from './core/Engine.js';
 import { GameState } from './core/GameState.js';
 import { EVENTS } from './core/EventBus.js';
 import { Renderer } from './render/Renderer.js';
+import { PostChain } from './render/PostChain.js';
+import { MaterialLibrary } from './render/MaterialLibrary.js';
+import { resolveQuality } from './render/quality.js';
 import { PhysicsWorld } from './physics/PhysicsWorld.js';
 import { InputSystem } from './input/InputSystem.js';
 import { PlayerController, STATE } from './character/PlayerController.js';
@@ -18,6 +21,7 @@ import { BossEncounter } from './level/BossEncounter.js';
 import { BossBar } from './ui/BossBar.js';
 import { VoidSequence } from './narrative/VoidSequence.js';
 import { Pigeon } from './companion/Pigeon.js';
+import { AudioSystem } from './audio/AudioSystem.js';
 import { HUD } from './ui/HUD.js';
 import { PauseMenu } from './ui/PauseMenu.js';
 import { DebugSystem } from './debug/DebugSystem.js';
@@ -57,8 +61,16 @@ async function main() {
   state.load();
 
   const viewport = document.getElementById('viewport');
-  const renderer = engine.provide('renderer', new Renderer(viewport));
+  const quality = engine.provide('quality', resolveQuality());
+  const renderer = engine.provide('renderer', new Renderer(viewport, quality));
   renderer.attach(engine);
+
+  boot.step(11, 'post chain');
+  const post = engine.provide('post', new PostChain(engine, quality));
+  if (post.enabled) renderer.composer = post;
+
+  boot.step(15, 'surfaces');
+  const materials = engine.provide('materials', new MaterialLibrary(quality));
 
   const debug = engine.provide('debug', new DebugSystem(engine, document.getElementById('debug-root')));
 
@@ -100,6 +112,7 @@ async function main() {
   checkpoints.add({ id: 'poolEdge', position: WAYPOINTS.poolApproach.clone().setY(-22.2), facing: Math.PI });
 
   const zones = engine.provide('zones', new ZoneManager(engine));
+  zones.post = post; // the grade rides the zone crossfade
   const bounds = (minX, minY, minZ, maxX, maxY, maxZ) => ({
     min: new THREE.Vector3(minX, minY, minZ), max: new THREE.Vector3(maxX, maxY, maxZ),
   });
@@ -119,6 +132,9 @@ async function main() {
   // Tell #2 needs to know where the star's light pools.
   pigeon.setStarRepulsor(encounter.arena.starGroup.position);
 
+  boot.step(86, 'sound');
+  const audio = engine.provide('audio', new AudioSystem(engine));
+
   const hud = new HUD(engine, player);
 
   // Damage lands on the player through events, so the controller never needs a
@@ -137,7 +153,25 @@ async function main() {
     cameraRig.snap({ yaw: intro.landingFacing + Math.PI });
     zones.snapTo('descent');
     hud.setBarsVisible(true);
+    bakeShadows();
   };
+
+  // Every occluder that matters in this chapter is static stonework, so the
+  // shadow maps are identical on frame two as on frame one. Baking them once
+  // removes the star's six-face shadow cube and the sun's directional pass
+  // from every subsequent frame — six of the ten scene passes the Star
+  // Chamber was paying for. `ultra` keeps them live.
+  //
+  // Timing matters and is easy to get wrong: `intro.start()` hides the entire
+  // chapter group for the duration of the void, so baking at boot would bake
+  // six empty cube faces and freeze them that way. It has to happen once the
+  // world is visible, which is exactly when the intro hands over.
+  let shadowsBaked = false;
+  function bakeShadows() {
+    if (shadowsBaked || quality.liveShadows) return;
+    shadowsBaked = true;
+    renderer.freezeShadows();
+  }
 
   // --- module registration, ordered by STAGE ------------------------------
   engine.add(input, STAGE.INPUT);
@@ -153,6 +187,7 @@ async function main() {
   engine.add(zones, STAGE.WORLD - 5);
   engine.add(encounter, STAGE.AI + 10);
   engine.add(checkpoints, STAGE.WORLD);
+  engine.add(audio, STAGE.AUDIO);
   engine.add(hud, STAGE.UI);
   engine.add(new BossBar(engine), STAGE.UI);
   engine.add(new PauseMenu(engine), STAGE.UI + 5);
@@ -196,6 +231,9 @@ async function main() {
     intro.start(chapter.group);
   }
 
+  boot.step(92, 'daylight');
+  chapter.bakeVolumetrics();
+
   boot.step(94, 'first frame');
   renderer.render();
   engine.add(renderer, STAGE.RENDER);
@@ -205,10 +243,28 @@ async function main() {
   boot.done();
 
   engine.start();
+
+  // ?bench — the one number this repo cannot measure for itself. Costs the
+  // shipping build a URLSearchParams read and a branch.
+  if (new URLSearchParams(location.search).has('bench')) {
+    const { Bench } = await import('./debug/Bench.js');
+    const bench = new Bench(engine, {
+      player, cameraRig, intro, waypoints: WAYPOINTS, renderer, quality,
+    });
+    engine.add(bench, STAGE.DEBUG + 10);
+    bench.start();
+    window.__VESSEL_BENCH_RUN = bench;
+  }
+
   window.__VESSEL_READY = true;
+  // The chapter's coordinate truth, for tools/collision.mjs — every spawn,
+  // checkpoint and debug warp resolves from this table, so auditing it is
+  // auditing the real thing.
+  window.__VESSEL_WAYPOINTS = WAYPOINTS;
   window.__VESSEL_API = {
     engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
     encounter, boss: encounter.boss, arena: encounter.arena, alignment, pigeon, STATE,
+    renderer, post, materials, quality, audio,
   };
 }
 
