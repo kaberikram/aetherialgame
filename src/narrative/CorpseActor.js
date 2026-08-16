@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 import { buildCharacter } from '../character/Rig.js';
 import { AnimationSystem } from '../character/AnimationSystem.js';
 import { corpseClip, standUpClip } from '../character/clips/actions.js';
@@ -17,11 +18,10 @@ import { corpseClip, standUpClip } from '../character/clips/actions.js';
 export class CorpseActor {
   constructor(scene) {
     const { mesh, rig } = buildCharacter({
-      material: new THREE.MeshStandardMaterial({
-        color: 0x9a9186,
-        roughness: 0.92,
-        metalness: 0,
-      }),
+      // A shade warmer and duller than the player's own body, so the thing on
+      // the ground and the thing that stands up out of it are distinguishable
+      // in the same frame.
+      material: toonMaterial({ color: 0x9a9186, bands: 3, rimStrength: 0.4 }),
     });
     this.mesh = mesh;
     this.rig = rig;

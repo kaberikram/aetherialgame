@@ -3,7 +3,8 @@ import { EVENTS } from '../core/EventBus.js';
 import { STATE } from '../character/PlayerController.js';
 import { ACTION } from '../input/Actions.js';
 import { CorpseActor } from './CorpseActor.js';
-import { makeGlow } from '../render/procedural/textures.js';
+import { makeGlow } from '../render/npr/Glow.js';
+import { BEAT } from './Beats.js';
 
 const _v = new THREE.Vector3();
 
@@ -116,7 +117,12 @@ export class VoidSequence {
 
     this.corpsePosition = new THREE.Vector3(0, VOID_ALTITUDE, 0);
     this.scene.background = new THREE.Color(0x000000);
-    this.scene.fog = null;
+    // Density to zero rather than `fog = null`. The fog object outlives the
+    // whole run: swapping it for null flips the USE_FOG define on every
+    // material in the scene and recompiles every program, which is a hitch
+    // measured in hundreds of milliseconds — and it fired on the void→world
+    // handoff, the single most fragile transition in the chapter.
+    this.#setFog(0x000000, 0);
 
     // Spawn 9m out, and SNAP the camera to face where the corpse will appear.
     // The first frame must already be pointed at the one thing that matters.
@@ -182,7 +188,7 @@ export class VoidSequence {
       this.pigeon?.holdAt(
         this.corpsePosition.clone().add(new THREE.Vector3(1.3, 1.7, 0.6))
       );
-      this.bus.emit(EVENTS.BEAT_ENTERED, { id: 1 });
+      this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.VOID });
     }
 
     if (!this.corpseShown) return;
@@ -264,7 +270,7 @@ export class VoidSequence {
       this.player.beginStandUp();
 
       this.scene.background = new THREE.Color(0x151a21);
-      this.scene.fog = new THREE.FogExp2(0x151a21, 0.055);
+      this.#setFog(0x151a21, 0.055);
       this.bus.emit(EVENTS.SFX, { id: 'embodiment' });
       this.cameraRig.addShake(0.7);
     }
@@ -279,9 +285,19 @@ export class VoidSequence {
     }
     if (this.player.state !== STATE.STAND_UP && this.timer > 1) {
       this.phase = 'done';
-      this.bus.emit(EVENTS.BEAT_ENTERED, { id: 3 });
+      // Beat 3 is announced by the handoff in main, not here — `skip()` also
+      // ends the sequence and both paths must fire the same beat exactly once.
       this.onComplete?.();
     }
+  }
+
+  /**
+   * Mutates the scene's existing fog rather than replacing it. See the note in
+   * `start()`: replacing it — in either direction — recompiles every shader.
+   */
+  #setFog(color, density) {
+    if (!this.scene.fog?.isFogExp2) this.scene.fog = new THREE.FogExp2(color, density);
+    else { this.scene.fog.color.setHex(color); this.scene.fog.density = density; }
   }
 
   get finished() {
@@ -307,7 +323,7 @@ export class VoidSequence {
     this.#releasePigeon();
     this.#restoreWorld();
     this.scene.background = new THREE.Color(0x151a21);
-    this.scene.fog = new THREE.FogExp2(0x151a21, 0.0032);
+    this.#setFog(0x151a21, 0.0032);
     this.player.facing = this.player.targetFacing = this.landingFacing;
     this.player.root.rotation.y = this.landingFacing;
     this.player.teleport(this.landingPosition);

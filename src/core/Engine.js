@@ -44,6 +44,9 @@ export class Engine {
   #paused = false;
   #frame = 0;
 
+  /** Debug slow-motion, driven by DebugSystem's [ and ] keys. */
+  timeScale = 1;
+
   // Rolling perf counters, read by the debug overlay and the smoke harness.
   perf = {
     fps: 0,
@@ -138,7 +141,7 @@ export class Engine {
 
   #tick() {
     const t0 = performance.now();
-    const { steps, alpha, delta } = this.#clock.advance(this.#paused);
+    const { steps, alpha, delta } = this.#clock.advance(this.#paused, this.timeScale);
     this.perf.steps = steps;
 
     const simStart = performance.now();

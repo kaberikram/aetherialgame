@@ -15,8 +15,10 @@ export class StatsOverlay {
 
   #el;
   #history = new Float32Array(120);
+  #scratch = new Float64Array(120);
   #cursor = 0;
   #accum = 0;
+  #p95 = 0;
   #worst = { cpuMs: 0, drawCalls: 0 };
 
   constructor(engine, debug) {
@@ -34,6 +36,15 @@ export class StatsOverlay {
     this.#worst.cpuMs = Math.max(this.#worst.cpuMs, p.cpuMs);
     this.#worst.drawCalls = Math.max(this.#worst.drawCalls, p.drawCalls);
 
+    this.#accum += dt;
+    const tick = this.#accum >= 0.1;
+    // The p95 used to be recomputed every frame — `Array.from` on 120 elements
+    // plus a filter plus a sort, three allocations and an O(n log n), sixty
+    // times a second — to feed a panel that redraws ten times a second. A
+    // profiler overlay that is itself a measurable cost reports on a game that
+    // does not exist.
+    if (tick) this.#p95 = this.#percentile(0.95);
+
     window.__VESSEL_PERF = {
       ready: true,
       fps: p.fps,
@@ -43,22 +54,29 @@ export class StatsOverlay {
       drawCalls: p.drawCalls,
       triangles: p.triangles,
       programs: p.programs,
+      pixelRatio: p.pixelRatio,
       worstCpuMs: this.#worst.cpuMs,
       worstDrawCalls: this.#worst.drawCalls,
-      p95CpuMs: this.#percentile(0.95),
+      p95CpuMs: this.#p95,
       frame: this.engine.frame,
     };
 
-    this.#accum += dt;
-    if (this.#accum < 0.1 || !this.debug.isOn('stats')) return;
+    if (!tick || !this.debug.isOn('stats')) return;
     this.#accum = 0;
     this.#render(p);
   }
 
+  /** Sorts into a reused scratch buffer; allocates nothing. */
   #percentile(q) {
-    const arr = Array.from(this.#history).filter((v) => v > 0).sort((a, b) => a - b);
-    if (!arr.length) return 0;
-    return arr[Math.min(arr.length - 1, Math.floor(arr.length * q))];
+    let n = 0;
+    for (let i = 0; i < this.#history.length; i++) {
+      const v = this.#history[i];
+      if (v > 0) this.#scratch[n++] = v;
+    }
+    if (n === 0) return 0;
+    const view = this.#scratch.subarray(0, n);
+    view.sort();
+    return view[Math.min(n - 1, Math.floor(n * q))];
   }
 
   #render(p) {
@@ -68,16 +86,15 @@ export class StatsOverlay {
       return over ? 'bad' : near ? 'warn' : 'ok';
     };
     const n = (v, d = 0) => v.toFixed(d).padStart(d ? 6 : 5);
-    const p95 = this.#percentile(0.95);
 
     this.#el.innerHTML =
       `<b>VESSEL</b> <span class="dim">frame ${this.engine.frame}${this.engine.paused ? ' PAUSED' : ''}</span>\n` +
       `fps   <span class="${cls(p.fps, BUDGET.fps, true)}">${n(p.fps, 1)}</span>\n` +
       `cpu   <span class="${cls(p.cpuMs, BUDGET.cpuMs)}">${n(p.cpuMs, 2)}</span> ms  ` +
-      `<span class="dim">p95 ${p95.toFixed(2)}</span>\n` +
+      `<span class="dim">p95 ${this.#p95.toFixed(2)}</span>\n` +
       `  sim <span class="dim">${n(p.simMs, 2)} ms   render ${n(p.renderMs, 2)} ms</span>\n` +
       `draws <span class="${cls(p.drawCalls, BUDGET.drawCalls)}">${n(p.drawCalls)}</span> ` +
       `<span class="dim">/ ${BUDGET.drawCalls}</span>\n` +
-      `tris  <span class="dim">${(p.triangles / 1000).toFixed(1)}k   progs ${p.programs}</span>`;
+      `tris  <span class="dim">${(p.triangles / 1000).toFixed(1)}k   progs ${p.programs}   dpr ${(p.pixelRatio ?? 1).toFixed(2)}</span>`;
   }
 }

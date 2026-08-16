@@ -50,6 +50,18 @@ export class CameraRig {
     this.lockTarget = null;
     this.lockPivotLift = 0;
     /**
+     * Where the camera is currently looking, damped separately from where it
+     * currently sits — see `update()` for why the two rates differ.
+     */
+    this.smoothLookAt = new THREE.Vector3();
+    /**
+     * Auto-recenter for mouse players. Off by default, because a camera that
+     * drifts on its own reads as the game wrestling the mouse away — but a
+     * mouse player with it off must orbit manually for every single turn in a
+     * chapter that is one long corridor, so it is theirs to choose.
+     */
+    this.autoRecenterKbm = false;
+    /**
      * Optional arena confinement: { center: Vector3, radius: number }.
      * A boss arena is ringed by stonework the camera must not sit behind. A
      * collider ring would work but would also stop the camera backing off from
@@ -64,6 +76,7 @@ export class CameraRig {
     this.bus.on(EVENTS.PLAYER_SPAWNED, () => this.snap());
 
     this.smoothPivot.copy(player.position).add(_v.set(0, TUNING.camera.height, 0));
+    this.smoothLookAt.copy(this.smoothPivot);
   }
 
   addShake(strength) {
@@ -85,7 +98,8 @@ export class CameraRig {
       Math.cos(this.yaw) * Math.cos(this.pitch)
     );
     this.camera.position.copy(this.smoothPivot).addScaledVector(_dir, this.currentDistance);
-    this.camera.lookAt(this.smoothPivot);
+    this.smoothLookAt.copy(this.smoothPivot);
+    this.camera.lookAt(this.smoothLookAt);
     this.camera.updateMatrixWorld(true);
   }
 
@@ -134,7 +148,8 @@ export class CameraRig {
     // reads as the game wrestling the mouse away from them.
     const p = this.player;
     const moving = Math.hypot(p.velocity.x, p.velocity.z) > 1.2;
-    if (this.idleTime > c.autoRecenterDelay && moving && this.input.device === 'gamepad') {
+    const recenters = this.input.device === 'gamepad' || this.autoRecenterKbm;
+    if (this.idleTime > c.autoRecenterDelay && moving && recenters) {
       // The rig's yaw is the direction from the pivot OUT to the camera, so
       // sitting behind the player means facing + π. Targeting `facing` puts the
       // camera in front, and since movement is camera-relative the two then
@@ -242,7 +257,18 @@ export class CameraRig {
       _v2.y += this.lockTarget.lockHeight ?? 1.0;
       _v.lerp(_v2, 0.38);
     }
-    this.camera.lookAt(_v);
+    // Rule 1 from the class comment — "position lags more than rotation" —
+    // finally implemented. `rotationSmoothing` was declared in tuning.js and
+    // read by nothing, so rotation was instant and only half the rule existed.
+    //
+    // The smoothing is on the look TARGET, not on yaw and pitch. Damping the
+    // orbit angles would have been the obvious reading and it is the wrong
+    // one: it puts 50ms of latency between the mouse and the view, which is
+    // the one place in a third-person camera where latency is unforgivable.
+    // Smoothing what the camera aims at leaves look input 1:1 and still makes
+    // the framing settle onto a moving body rather than snapping to it.
+    this.smoothLookAt.lerp(_v, Math.min(1, c.rotationSmoothing * dt));
+    this.camera.lookAt(this.smoothLookAt);
 
     // Sprint FOV. Small, but it is most of what makes speed read as speed.
     const speed = Math.hypot(p.velocity.x, p.velocity.z);

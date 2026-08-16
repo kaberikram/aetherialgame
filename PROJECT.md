@@ -37,7 +37,7 @@ Something is wrong and the player should feel it before they can name it. The gu
 - *Star Chamber:* desaturated indigo and slate, one white point light doing all the work, hard falloff into black.
 - *Pagoda Well:* warm daylight shaft into cool wet stone. Only sky in the chapter.
 
-**Rendering language.** Painterly, not photoreal. Value structure over surface detail. If a frame does not read in grayscale, it fails.
+**Rendering language.** Anime cel-shaded NPR. Non-photorealistic throughout: hard-banded diffuse ramps, a Fresnel rim in place of a specular highlight, and ink line work on the silhouette and the interior creases. Think Guilty Gear Xrd's ink and Wave Race 64's stylised water energy, rendered with modern shader technique. Value structure over surface detail. If a frame does not read in grayscale, it fails. **If any surface in a shipped frame reads as physically based, the art direction has failed.**
 
 **Scale.** Player silhouette reads small against architecture and bosses. The concept board of the pagoda sets the ratio: a person is a few pixels tall against the temple.
 
@@ -69,13 +69,13 @@ Choices are irreversible within a run. Chapter 1 resolves the **wings** slot onl
 
 ## Technical stack
 
-- **Renderer:** Three.js. PBR throughout: albedo, normal, roughness, metalness, AO. No default-material surfaces ship.
+- **Renderer:** Three.js. Zero PBR. One cel material (`render/npr/ToonMaterial.js`) — banded gradient ramp plus a rim term — and one ink pass (`render/npr/InkEdges.js`). No albedo/normal/roughness/metalness/AO maps anywhere; no tone mapping, because a filmic curve smears the bands it is applied to. No default-material surfaces ship. The gate is mechanical: `grep -rn 'MeshStandardMaterial\|MeshPhysicalMaterial' src/` must come back empty.
 - **Physics:** Rapier. Capsule character controller with step offset and slope handling. Ragdoll on death.
 - **Shadows:** cascaded shadow maps on the key light, tuned to kill peter-panning and acne.
-- **Post:** TAA or FXAA, emissive-keyed bloom, ACES tone mapping, per-zone LUT grading, SSAO, subtle vignette.
-- **Volumetrics:** raymarched shafts in Star Chamber and Pagoda Well. No billboard fakes.
-- **Indirect:** baked or probe-based. Real-time GI is out of budget.
-- **Water:** screen-space reflection, refraction, depth-based murk, dynamic displacement on boss breach. The pool is a character, budget for it.
+- **Post:** none. The scene draws straight to the canvas with MSAA. Bloom, AO, grading and tone mapping are all photographic corrections and all of them fight cel shading; the per-zone palette lives in the key light, the fill, the ambient hemisphere and the fog instead. See DECISIONS D53.
+- **Volumetrics:** none. Under cel shading a god ray is a hard-edged drawn shape, not a density integral, so the raymarched shafts are gone and their replacement is geometry — art-pass work, not renderer work. See DECISIONS D54.
+- **Indirect:** a hemisphere ambient term and a fill light. Real-time GI is out of budget and probe-based bounce is the wrong model for a renderer with three lighting bands.
+- **Water:** flat translucent planes with the rim term carrying the waterline. No SSR, no refraction, no depth murk. The pool is still a character — but it is a character made of *depth*, and `StarChamberArena.depthAt()` is where that lives, not in the shader.
 - **Animation:** locomotion blend trees, root motion on attacks, foot IK on uneven ground, layered upper-body hit reactions.
 - **Scene:** instancing for foliage and props, LODs above ~5k tris, frustum and occlusion culling.
 - **Audio:** positional with per-zone reverb, surface-typed footsteps, distinct cue per boss wind-up.

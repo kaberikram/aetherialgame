@@ -54,7 +54,7 @@ const CHROME = ['/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-1194/chr
  */
 const QUALITY = process.argv.includes('--quality')
   ? process.argv[process.argv.indexOf('--quality') + 1]
-  : 'ultra';
+  : 'high';
 
 /**
  * 1600×900 by default, not 1440p.

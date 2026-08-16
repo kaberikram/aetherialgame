@@ -13,10 +13,9 @@ import { STATE } from '../character/PlayerController.js';
 export class StateInspector {
   updateWhilePaused = true;
 
-  constructor(engine, debug, player, lockOn) {
+  constructor(engine, debug, player) {
     this.engine = engine;
     this.player = player;
-    this.lockOn = lockOn;
     this.debug = debug;
     this.el = debug.registerPanel('state', { corner: 'bl' });
     this.accum = 0;
@@ -29,6 +28,7 @@ export class StateInspector {
 
     const p = this.player;
     const speed = Math.hypot(p.velocity.x, p.velocity.z);
+    const slope = p.slopeAngle;
     const st = p.stamina;
 
     const bar = (v, max, width = 18, cls = '') => {
@@ -63,7 +63,12 @@ export class StateInspector {
       `\npos    ${p.position.x.toFixed(1)}, ${p.position.y.toFixed(1)}, ${p.position.z.toFixed(1)}` +
       `\nfacing ${((p.facing * 180) / Math.PI).toFixed(0)}°` +
       (p.waterDepth > 0.01 ? `  <span class="warn">water ${p.waterDepth.toFixed(2)}m</span>` : '') +
-      `\nlock   ${this.lockOn?.target ? `<span class="ok">${this.lockOn.target.name ?? 'target'}</span>` : '<span class="dim">none</span>'}` +
+      // Ground contact, which the controller now actually reads back from
+      // Rapier. A slope that reports 0° while you are visibly on a ramp means
+      // the collider under you is not the one you can see — which is exactly
+      // the bug class that went unnoticed here for two phases.
+      `\nground ${slope.toFixed(0).padStart(3)}°  n ${p.groundNormal.x.toFixed(2)},${p.groundNormal.y.toFixed(2)},${p.groundNormal.z.toFixed(2)}` +
+      `  ${p.wallContact ? '<span class="warn">wall</span>' : '<span class="dim">—</span>'}` +
       `\nbuffer ${p.buffer.pending ? `<span class="ok">${p.buffer.pending}</span>` : '<span class="dim">—</span>'}` +
       `\nanim   <span class="dim">${p.anim.playing.filter((x) => x.weight > 0.02).map((x) => `${x.clip.id}:${x.weight.toFixed(2)}`).join(' ') || '—'}</span>`;
   }

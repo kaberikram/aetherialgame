@@ -30,7 +30,6 @@ export const TUNING = {
     groundAccel: 26,
     groundDecel: 34,
     airAccel: 6,
-    airDrag: 0.6,
     // Turning is rate-limited rather than instant, so a 180 costs real time.
     turnRateWalk: 9.5, // rad/s
     turnRateRun: 6.4,
@@ -42,7 +41,7 @@ export const TUNING = {
     maxFallSpeed: -32,
     coyoteFrames: 5,
     jumpBufferFrames: 8,
-    jumpRecoveryFrames: 12, // cannot attack or roll during this, per CONTROLS.md
+    jumpRecoveryFrames: 12, // no roll out of a landing, per CONTROLS.md
     landHardThreshold: 14, // m/s of impact that triggers a heavy landing
     landHardRecoveryFrames: 22,
     fallDamageThreshold: 19,
@@ -54,6 +53,11 @@ export const TUNING = {
     snapToGroundDistance: 0.35,
     capsuleRadius: 0.32,
     capsuleHalfHeight: 0.52, // total height ≈ 1.68m
+    // Uphill costs speed; downhill deliberately does not give it back, because
+    // free acceleration on a decline reads as losing control and this chapter
+    // is one long decline. Applied against the ground normal the character
+    // controller actually reports.
+    slopeSpeedUphill: 0.72,
   },
 
   /** Water changes the fight in the Star Chamber. Depth is the dial. */
@@ -81,8 +85,10 @@ export const TUNING = {
     backstepInvulnFrames: 12,
     staminaCost: 22,
     backstepStaminaCost: 14,
-    // Direction is captured at the press, never re-read mid-animation.
-    bufferFrames: 14,
+    // Direction is captured at the press, never re-read mid-animation. The
+    // buffer window itself is `combat.inputBufferFrames` — there was a second,
+    // never-read `bufferFrames: 14` here, and two numbers claiming to be the
+    // same window is how one of them silently stops being true.
   },
 
   /** ---------------------------------------------------------------- STAMINA */
@@ -144,7 +150,6 @@ export const TUNING = {
     cycleCooldownFrames: 12,
     losCheckIntervalFrames: 6,
     // Souls framing: the target sits slightly off-centre, not FPS dead-centre.
-    screenBiasX: 0.0,
     screenBiasY: 0.11,
   },
 

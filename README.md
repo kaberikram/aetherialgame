@@ -2,10 +2,21 @@
 
 A third-person souls-like built in Three.js, in the lineage of Elden Ring and
 Black Myth: Wukong, rooted in Southeast Asian mythology. Chapter 1 is a
-complete opening arc — void to sky, 25–40 minutes — with a movement system, a
-full combat framework, a two-phase boss, a seven-slot alignment architecture
-resolved by an irreversible wing choice, and a companion with a betrayal
-hiding in plain sight.
+complete opening arc — void to sky — with a movement system, a seven-slot
+alignment architecture resolved by an irreversible wing choice, and a companion
+with a betrayal hiding in plain sight.
+
+**The current build is a cel-shaded grey-box blockout.** The whole chapter is
+there at true scale and the flow runs end to end, but the art pass has been
+rolled back and combat is out while the controls are tuned. See
+**[STATUS.md](STATUS.md)** for exactly what runs and what does not.
+
+Rendering is non-photorealistic throughout: anime cel shading with hard-banded
+diffuse ramps, a Fresnel rim in place of specular, and ink line work on
+silhouettes and interior creases. There is no post-processing chain and no tone
+mapping. Zero PBR — that is a mechanical gate, not an aspiration:
+`grep -rn 'MeshStandardMaterial\|MeshPhysicalMaterial' src/` must come back
+empty.
 
 Every mesh, texture, animation clip and sound effect is generated in code.
 There are no binary art assets in this repo — see [DECISIONS.md](DECISIONS.md)
@@ -35,27 +46,29 @@ Open the printed local URL. Click the canvas once to capture the mouse.
 | Space | Dodge / roll — direction read from WASD at the press |
 | Shift | Sprint |
 | F | Jump; once wings resolve, takeoff and hold to flap-climb |
-| Left / Right click | Light / heavy attack |
-| Q (hold) | Guard — a fresh press inside the window is a deflect |
 | R | Use flask |
 | E | Interact |
-| Tab | Lock on / cycle target |
-| C | Alignment ability |
-| Esc | Pause + controls reference |
+| Esc | Pause + controls + look settings |
+
+Attack, guard and lock-on are unbound: there is no combat in this build.
 
 **Gamepad** follows the Xbox-style Elden Ring layout in
-[CONTROLS.md](CONTROLS.md) exactly, including analog-trigger deflect.
+[CONTROLS.md](CONTROLS.md) for everything that still exists. The combat half of
+that mapping is dormant along with combat itself.
 
-**Debug overlay:** F1 stats · F2 hitboxes & frame data · F3 state inspector ·
-F4 gamepad overlay · F8 pause (`.` steps one frame) · 1–5 warp to zone ·
-8 wing choice · 9 boss fight · `-` die · `=` refill flask · backtick skip intro.
+**Debug overlay:** F1 stats · F3 state inspector · F4 gamepad overlay ·
+**F5 physics colliders** · **F7 freecam** · F8 pause (`.` steps one frame) ·
+F11 grayscale · `[` `]` time scale · 1–5 warp to zone · 8 wing choice ·
+9 boss · `-` die · `=` refill flask · backtick skip intro.
 
 ## Verifying a build
 
 ```bash
-npm run smoke                          # headless boot + perf check
-node tools/smoke.mjs --script walk --shot frame   # drives movement, captures a frame
-node tools/probe.mjs --skipIntro --keys "Digit3:80" "api.player.state"  # ad-hoc inspection
+npm run smoke        # headless boot, zero console errors, perf counters
+npm run controls     # 8 strafe/look assertions at 4 camera yaws
+npm run collision    # ground / continuity / spawn / height-function audit
+node tools/perf.mjs  # scene passes, draw calls, triangles, pixels per frame
+node tools/probe.mjs --skipIntro --keys "Digit3:80" "api.player.state"
 ```
 
 `tools/smoke.mjs` drives the preinstalled Chromium headlessly, asserts zero
@@ -75,33 +88,34 @@ other's internals.
 ```
 src/
   core/        Engine, EventBus, GameState, Clock
-  render/      Renderer, procedural texture/glow generation
+  render/      Renderer, adaptive pixel ratio
+  render/npr/  the cel material, the ink pass, banded glow sprites
   physics/     Rapier world, character controller, collision filters
   input/       Gamepad + keyboard/mouse, deadzone/curve handling, buffering
   character/   Rig, animation system, player controller, wings, flight
-  combat/      Frame data, hitboxes, damage, vitals, lock-on
-  ai/          Boss controller, boss rig and clips, frame data
+  combat/      Vitals (the rest is out — see STATUS.md)
   level/       Chapter geometry, zones, arena, checkpoints, fog gate
   companion/   The pigeon
   narrative/   Void sequence, wing choice
-  ui/          HUD, boss bar
-  debug/       Stats, hitbox viz, state inspector, gamepad overlay
+  ui/          HUD, pause menu
+  debug/       Stats, state inspector, collider view, freecam, gamepad overlay
 tools/         smoke.mjs, probe.mjs — headless verification harnesses
 ```
 
 ## Build status
 
-Phases 0–6 of the ten-phase plan in `PHASES.md` are complete: foundation,
-movement, combat, the boss encounter, the full level blockout, the alignment
-system with flight, and the companion with its three tells. Phases 7–10 (art
-pass, motion & sound, performance pass, packaged build) have not started.
+Phases 0–8 landed and the Phase 7 art pass was then rolled back: it made the
+game unplayable on the target machine, and the art direction changed to NPR
+underneath it. The current build is a cel-shaded blockout with the flow intact
+and combat stubbed.
 
-See [STATUS.md](STATUS.md) for the full breakdown, what's explicitly missing,
-and which gates are feel-judgements reserved for a human rather than verified
-automatically.
+See [STATUS.md](STATUS.md) for the full breakdown, the measured before/after,
+what's explicitly missing, and which gates are feel-judgements reserved for a
+human rather than verified automatically.
 
 ## Tech stack
 
-Three.js (WebGL2, ACES tone mapping) · Rapier physics (kinematic capsule
-controller) · Vite · procedural geometry/texture/animation, no binary assets.
-Locked technical decisions and reasoning: [DECISIONS.md](DECISIONS.md).
+Three.js (WebGL2, cel-shaded NPR, no post chain, no tone mapping) · Rapier
+physics (kinematic capsule controller against analytic cuboids) · Vite ·
+procedural geometry/animation/audio, no binary assets. Locked technical
+decisions and reasoning: [DECISIONS.md](DECISIONS.md).

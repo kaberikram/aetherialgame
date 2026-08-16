@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { EVENTS } from '../core/EventBus.js';
 import { TUNING } from '../tuning.js';
@@ -58,9 +59,9 @@ export class Pigeon {
   #build() {
     const group = new THREE.Group();
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8e9298, roughness: 0.72, metalness: 0.04 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x4c5158, roughness: 0.66, metalness: 0.10 });
-    const beakMat = new THREE.MeshStandardMaterial({ color: 0x33322f, roughness: 0.55, metalness: 0.1 });
+    const bodyMat = toonMaterial({ color: 0x8e9298, bands: 4, rimStrength: 0.6, rimPower: 2.6 });
+    const darkMat = toonMaterial({ color: 0x4c5158, bands: 3, rimStrength: 0.55 });
+    const beakMat = toonMaterial({ color: 0x33322f, bands: 3, rimStrength: 0.5 });
 
     // A grey pigeon. Ordinary on purpose — nothing about its silhouette should
     // read as important until the shadow does the work.

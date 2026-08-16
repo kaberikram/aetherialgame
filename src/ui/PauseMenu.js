@@ -72,6 +72,10 @@ export class PauseMenu {
             <span class="pause-label">invert look</span>
             <button class="pause-btn pause-wide" data-act="invert">off</button>
           </div>
+          <div class="pause-row">
+            <span class="pause-label">auto-recenter (mouse)</span>
+            <button class="pause-btn pause-wide" data-act="recenter">off</button>
+          </div>
         </div>
         <table class="pause-controls"></table>
         <div class="pause-resume">esc — resume</div>
@@ -161,6 +165,9 @@ export class PauseMenu {
     this.basePad = TUNING.camera.lookSensitivityGamepad;
     this.sens = saved.sens ?? 1;
     this.invert = saved.invert ?? false;
+    // Off by default: a camera that moves on its own is the right default for
+    // a pad and the wrong one for a mouse. Offered rather than imposed.
+    this.autoRecenter = saved.autoRecenter ?? false;
     this.#applySettings();
   }
 
@@ -169,14 +176,19 @@ export class PauseMenu {
     TUNING.camera.lookSensitivityGamepad = this.basePad * this.sens;
     TUNING.input.kbm.invertY = this.invert;
     TUNING.input.gamepad.invertY = this.invert;
+    if (this.engine.has('camera')) this.engine.resolve('camera').autoRecenterKbm = this.autoRecenter;
 
     const v = this.el.querySelector('[data-val="sens"]');
     if (v) v.textContent = `${Math.round(this.sens * 100)}%`;
     const b = this.el.querySelector('[data-act="invert"]');
     if (b) b.textContent = this.invert ? 'on' : 'off';
+    const r = this.el.querySelector('[data-act="recenter"]');
+    if (r) r.textContent = this.autoRecenter ? 'on' : 'off';
 
     try {
-      localStorage.setItem('vessel.look', JSON.stringify({ sens: this.sens, invert: this.invert }));
+      localStorage.setItem('vessel.look', JSON.stringify({
+        sens: this.sens, invert: this.invert, autoRecenter: this.autoRecenter,
+      }));
     } catch { /* private browsing */ }
   }
 
@@ -184,6 +196,7 @@ export class PauseMenu {
     if (act === 'sens-up') this.sens = Math.min(3, +(this.sens + 0.1).toFixed(2));
     else if (act === 'sens-down') this.sens = Math.max(0.2, +(this.sens - 0.1).toFixed(2));
     else if (act === 'invert') this.invert = !this.invert;
+    else if (act === 'recenter') this.autoRecenter = !this.autoRecenter;
     this.#applySettings();
   }
 

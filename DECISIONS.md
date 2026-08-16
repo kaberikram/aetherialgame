@@ -315,3 +315,162 @@ already five times inside its budget, at the cost of touching every zone
 builder immediately after an art pass. The cut that mattered was fill, and it
 has been made. This stays queued for P9 and gets done if — and only if — `?bench`
 on real hardware says CPU submission, not fill, is the limit.
+
+---
+
+## P-Blockout — the reset
+
+Chapter 1 shipped its art pass and became unplayable on the target machine. The
+pass below is a deliberate step backwards in fidelity to get the frame and the
+character controller onto ground that can be measured.
+
+### D53. The renderer is NPR, and the post chain is gone
+The brief changed: the game is anime cel-shaded, "if any surface reads as
+physically based, you have failed." That reverses D41's world-space PBR
+projection, D44's borrowed depth, and most of D49's tuning — but it is not a
+reversal that costs anything, because the post chain was also the frame's
+largest single expense.
+
+Measured, at the old default: **17 full-screen quads, ~22 megapixels of
+fragment work per frame** through ~150 MB of HalfFloat targets, plus a GTAO
+pass that re-submitted the entire scene through `scene.overrideMaterial` — so
+821 draw calls became ~1,640 submissions. Bloom alone was twelve of those quads
+and ran at every preset except `off`.
+
+None of it survives. `Renderer` draws the scene to the canvas once. Tone mapping
+is `NoToneMapping`: ACES exists to compress a high dynamic range into a display,
+which is exactly the wrong operation on a hard-banded ramp — it smears the steps
+back into the gradient the shading model was built to avoid.
+
+The per-zone grade went with the chain. That is the right home for it anyway: a
+grade is a photographic correction pulled over the top of a finished render, and
+under cel shading the palette belongs in the key light, the fill, the ambient
+hemisphere and the fog, where an animator would put it.
+
+### D54. The god rays were free to delete, because they were already free
+`VolumetricShaft` was the most expensive object in the game: 20 raymarch steps ×
+4 dependent texture taps, over a radius-30 × 58m cylinder with
+`frustumCulled = false`, and `depthTest` forced **off** whenever scene depth was
+bound — so it marched behind solid stone. Standing in the well, roughly **200
+million texture fetches per frame**.
+
+It was also sampling a blank map. `intro.start()` hides the entire chapter group
+for the void sequence; `bakeVolumetrics()` ran immediately after and baked
+occlusion against that hidden scene. `shadowAt()` returned 1.0 for every tap for
+the whole run. The shadow bake beside it got the ordering right (`main.js` hooks
+it to `intro.onComplete`) and this one did not — the same hazard, thirty lines
+apart, caught once.
+
+Nothing replaces it yet. A god ray in ink-and-paint is a hard-edged drawn shape,
+not a density integral, so its replacement is geometry and belongs to the art
+pass.
+
+### D55. Cuboids, not trimeshes — a controller decision, not a rendering one
+`ZoneBuilder.solid()` fed the visual `BufferGeometry` straight into Rapier as a
+trimesh, so every walkable surface in the chapter was whatever triangles a sweep
+happened to emit. `box()` and the new `ramp()` register analytic cuboids
+instead, and `solid()` is now the exception — two surfaces keep it: the well
+shaft (flown up, so contact happens at arbitrary angles) and the pool basin
+(a continuous depth gradient that is a mechanic).
+
+The payoff is immediate and measurable. `GREEN_VEIN_FLOOR` is **linear in z**, so
+a single ramp between its endpoints is not an approximation of the function — it
+is the same plane. `tools/collision.mjs` measured the old floor at **0.55m** of
+divergence from the function it was generated from, a defect STATUS.md documented
+as known and worked around. It now measures **0.01m**, and the workaround the
+water needed is deleted rather than maintained.
+
+### D56. A key and a fill, and the ceiling does not cast
+The scene carried **~25 unculled point lights**. Three.js builds one global light
+list, so every stone fragment in the Descent ran a 25-iteration loop for lights
+in a room 100m away, plus a point-shadow-cube lookup and a directional one. No
+quality preset reduced it. That was almost certainly the largest fragment cost in
+the game and it was invisible in every draw-call number the project had recorded.
+
+It is now one directional key, one directional fill, one hemisphere ambient.
+Three lights, everywhere, for the whole chapter.
+
+Two things about that setup are load-bearing and were both got wrong first:
+
+- **The key is low (~35°), not overhead.** A banded ramp has no falloff: a
+  surface is in a band or in the one below it. With the key near-vertical, every
+  horizontal surface sat in the top band and every vertical one — walls,
+  characters, anything with a silhouette — sat in the bottom. Bright floor,
+  black everything else.
+- **The fill is not optional.** A surface facing away from the key does not fall
+  off toward darkness, it lands in the bottom band and stays. Without a fill, a
+  character walking away from the key is a flat cut-out, which fails the rubric's
+  "readable at 10% screen height" outright.
+
+And ceilings are `castShadow: false`. Every zone in this chapter is roofed, so a
+shadow-casting roof means one directional key reaches nothing at all and the
+interior is lit by ambient alone. Walls and floors still cast onto each other.
+
+### D57. Ink is merged EdgesGeometry, not an inverted hull and not a post pass
+The two standard answers both fail here. An **inverted hull** relies on averaged
+vertex normals and a blockout is made of boxes, whose normals point three
+different ways at every corner — the shell tears open exactly where a box is most
+readable. A **depth/normal edge-detect post pass** works, but reintroduces the
+fullscreen chain D53 just deleted, to redraw lines whose positions we already
+know.
+
+`EdgesGeometry` has the topology, so it gives the silhouette *and* the interior
+architectural creases — the more ink-and-paint read anyway; hand-drawn line work
+does not stop at the outline. Every mesh in a zone is merged into one buffer, so
+the chapter's entire line work is four draw calls.
+
+### D58. Combat is deleted at the seams, not disabled behind flags
+`src/ai/`, the hitbox/damage/lock-on systems and the attack move set are gone
+rather than switched off. The seams are the ones `docs/INTERFACES.md` already
+declared — the `EventBus` contract, `ZoneBuilder`, `BossEncounter`'s fight hook —
+so the fight drops back in without reopening the level or the renderer.
+
+`BossStub` keeps the chain intact: fog gate → engage → `BOSS_DEFEATED` → the wing
+choice → flight → the oculus. Cutting the boss entirely would have left half the
+chapter unreachable while the question on the table is whether walking through it
+feels good. The wing choice needed no stub at all — per D28 it is committed by
+walking within 2.3m of a form, which is pure navigation.
+
+`AnimationSystem` could not be removed and was never a candidate: jump apex fires
+from a clip event, roll distance is root motion baked into `clips/actions.js`, and
+roll i-frames come from clip events. Locomotion here is animation-driven by
+design (D6, D12).
+
+### D59. The dead constants are wired or deleted, not left ambiguous
+An audit found five tuning constants that were declared, documented, and read by
+nothing. Each was resolved rather than tidied:
+
+| constant | resolution |
+|---|---|
+| `camera.rotationSmoothing` | **Implemented.** Rule 1 of CameraRig — "position lags more than rotation" — was half-built. Smoothing is on the look *target*, not on yaw/pitch: damping the orbit angles is the obvious reading and the wrong one, because it puts 50ms between the mouse and the view. |
+| `movement.jumpRecoveryFrames` | **Enforced.** CONTROLS.md always claimed it was. |
+| `movement.airDrag` | **Deleted.** `airAccel` already produces the deceleration; a second overlapping term is a feel regression dressed as a fix. |
+| `roll.bufferFrames` | **Deleted.** A duplicate of `combat.inputBufferFrames`, and two numbers claiming to be the same window is how one of them stops being true. |
+| `lockOn.screenBiasX` | **Deleted** with lock-on. |
+| `DebugSystem.timeScale` | **Wired.** It scales the time fed to the accumulator, not the step — the fixed step must stay 1/60 or frame data means nothing. |
+
+Plus one that was worse than dead: **`PlayerController.groundNormal` was declared
+and never written or read**, so every slope in a chapter shaped entirely like a
+descent walked exactly like flat ground. It is read back from Rapier's computed
+collisions now and drives uphill speed.
+
+### D60. The wall scrub needed a wall
+`#integrate` cut an axis's velocity to 20% whenever the controller returned less
+than half the requested motion. That fires on every legitimate step-up and every
+slope climb — autostep and slope resolution both return less horizontal motion
+than was asked for — so walking up stairs dropped the player to a fifth speed on
+the frame each step cleared. It now requires an actual near-vertical contact,
+using the same angle as the climb limit so "wall" and "cannot walk up this" are
+one question answered once.
+
+### D61. The collider view renders physics, not a parallel list
+`F5: 'colliders'` was declared in Phase 0 and read by nothing for the entire
+project — while the repo simultaneously documented a bug where the walkable floor
+and the function generating it disagreed by half a metre.
+
+`ColliderView` drives `world.debugRender()` rather than tracking the boxes as
+they are created. The obvious implementation draws *what we asked for*; this
+draws what Rapier actually has, including the player capsule, the containment
+ring, and anything registered by code that forgot to tell a debug list. A debug
+view that can drift from the thing it debugs is worse than none, because it is
+confidently wrong.

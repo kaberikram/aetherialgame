@@ -12,8 +12,6 @@ import { EVENTS } from '../core/EventBus.js';
  * F6  overlay: navigation / companion path                 [P6]
  * F7  free camera (detach from player)                     [P1]
  * F8  pause simulation  ( . steps one frame while paused )  [P0]
- * F9  cycle per-zone LUT / grading debug                   [P7]
- * F10 toggle post-processing chain                         [P7]
  * F11 grayscale view — the rubric's "does it read" check   [P7]
  * F12 (reserved to the browser, never bound)
  *
@@ -33,8 +31,9 @@ export const DEBUG_KEYS = Object.freeze({
   F6: 'navigation',
   F7: 'freecam',
   F8: 'pause',
-  F9: 'grading',
-  F10: 'post',
+  // F9 (per-zone grade) and F10 (post chain) are gone with the post chain
+  // itself. Binding a key to a toggle that no longer toggles anything is worse
+  // than not binding it — F5 spent this whole project declared and dead.
   F11: 'grayscale',
 });
 
@@ -100,12 +99,20 @@ export class DebugSystem {
       e.preventDefault();
       this.engine.stepOnce();
     }
-    if (e.key === '[') this.timeScale = Math.max(0.1, this.timeScale - 0.1);
-    if (e.key === ']') this.timeScale = Math.min(2, this.timeScale + 0.1);
+    // Time scale actually scales time now. It used to be stored here and read
+    // by nothing, which made slow-motion inspection of a jump arc or a roll
+    // look like a broken key rather than a missing feature.
+    if (e.key === '[') this.#setTimeScale(this.timeScale - 0.1);
+    if (e.key === ']') this.#setTimeScale(this.timeScale + 0.1);
     if (e.key === '\\' && e.shiftKey) {
       this.engine.resolve('state').clear();
       location.reload();
     }
+  }
+
+  #setTimeScale(v) {
+    this.timeScale = Math.round(Math.max(0.1, Math.min(2, v)) * 10) / 10;
+    this.engine.timeScale = this.timeScale;
   }
 
   #buildStyles() {

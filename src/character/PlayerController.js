@@ -7,15 +7,21 @@ import { buildCharacter } from './Rig.js';
 import { AnimationSystem } from './AnimationSystem.js';
 import { buildLocomotionClips } from './clips/gait.js';
 import { buildActionClips } from './clips/actions.js';
-import { buildAttackClips } from './clips/attacks.js';
 import { Stamina } from './Stamina.js';
 import { Vitals } from '../combat/Vitals.js';
-import { BoundCapsule, StaticCapsule } from '../combat/HitboxSystem.js';
-import { PLAYER_MOVES, OPENERS, getMove } from '../combat/data/playerMoves.js';
-import { buildSword } from './Weapon.js';
 import { Alignment } from './Alignment.js';
 import { Flight } from './Flight.js';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 
+/**
+ * The state machine, trimmed to locomotion and narrative.
+ *
+ * Attack, guard, deflect, stagger and critical are gone with the combat
+ * framework. They come back with it — the deletions were at the seams the
+ * module contract already declared, not through them — but while the question
+ * on the table is "does moving feel good", a state you cannot enter is a state
+ * that only makes the machine harder to read.
+ */
 export const STATE = Object.freeze({
   DRIFT: 'drift',         // beat 1: a formless light, weightless, no collision
   CORPSE: 'corpse',       // the body, before the light enters it
@@ -28,12 +34,7 @@ export const STATE = Object.freeze({
   LAND_HARD: 'landHard',
   ROLL: 'roll',
   BACKSTEP: 'backstep',
-  ATTACK: 'attack',
-  GUARD: 'guard',
-  DEFLECT: 'deflect',
   DRINK: 'drink',
-  STAGGER: 'stagger',
-  CRITICAL: 'critical',
   DEAD: 'dead',
   FLIGHT: 'flight',
 });
@@ -41,13 +42,11 @@ export const STATE = Object.freeze({
 /** States that commit: input cannot pull the character out of them. */
 const COMMITTED = new Set([
   STATE.ROLL, STATE.BACKSTEP, STATE.LAND_HARD, STATE.JUMP_START, STATE.STAND_UP,
-  STATE.CORPSE, STATE.ATTACK, STATE.DRINK, STATE.STAGGER, STATE.CRITICAL, STATE.DEAD,
-  STATE.DEFLECT,
+  STATE.CORPSE, STATE.DRINK, STATE.DEAD,
 ]);
 /** States whose horizontal motion comes from the animation, not from input. */
 const ROOT_MOTION_STATES = new Set([
-  STATE.ROLL, STATE.BACKSTEP, STATE.STAND_UP, STATE.ATTACK, STATE.STAGGER,
-  STATE.CRITICAL, STATE.DEAD, STATE.DRINK,
+  STATE.ROLL, STATE.BACKSTEP, STATE.STAND_UP, STATE.DEAD, STATE.DRINK,
 ]);
 
 const _v = new THREE.Vector3();
@@ -55,6 +54,11 @@ const _v2 = new THREE.Vector3();
 const _flat = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _up = new THREE.Vector3(0, 1, 0);
+const _groundHit = new THREE.Vector3();
+/** Reused across every contact read, so the fixed step allocates nothing. */
+let _collision = null;
+/** cos of the climb limit: above this a surface is floor, below it is wall. */
+const _maxSlopeCos = Math.cos(THREE.MathUtils.degToRad(TUNING.movement.maxSlopeDegrees));
 
 /**
  * PlayerController — owns the player state machine and turns input intent into
@@ -100,20 +104,9 @@ export class PlayerController {
     });
     this.buffer = new InputBuffer();
 
-    // Guard state is read by DamageSystem. `deflectFramesLeft` is the narrow
-    // window inside a guard where an incoming hit becomes a deflect instead.
-    this.guardState = { active: false, deflectFramesLeft: 0 };
-    this.deflectBonusFrames = 0;
-    this.deflectMultiplier = 1;
-
     this.flaskCharges = TUNING.health.flaskCharges;
-    this.currentMove = null;
-    this.moveFrame = 0;
-    this.hitboxOpen = false;
-    this.chainQueued = null;
-    this.criticalTarget = null;
 
-    /** Filled by LockOn; the controller only reads it. */
+    /** Filled by LockOn when combat returns; the controller only reads it. */
     this.lockTarget = null;
 
     this.#buildBody();
@@ -128,17 +121,17 @@ export class PlayerController {
     this.renderer.scene.add(this.root);
 
     // The sword is parented to the hand bone, so it follows the animation with
-    // no extra bookkeeping and the hitbox capsule tracks the same bone.
-    this.sword = buildSword();
+    // no extra bookkeeping. It is inert until combat returns — the pickup is
+    // still a beat in the chapter, and a beat that hands you nothing visible
+    // is a beat the player will not believe happened.
+    this.sword = buildHeldSword();
     this.sword.visible = false;
     rig.byName.get('hand.R').add(this.sword);
 
     this.anim = new AnimationSystem(rig, this.bus);
-    this.anim.register(...buildLocomotionClips(), ...buildActionClips(), ...buildAttackClips());
+    this.anim.register(...buildLocomotionClips(), ...buildActionClips());
     this.anim.onEvent = (ev) => this.#onAnimEvent(ev);
     this.anim.play('idle', { fadeFrames: 0 });
-
-    this.hurtbox = new StaticCapsule({ position: this.position, height: 1.68, radius: 0.34 });
 
     const m = TUNING.movement;
     const body = this.physics.createCharacter({
@@ -155,14 +148,6 @@ export class PlayerController {
     this.controller = body.controller;
     this.capsuleOffset = m.capsuleHalfHeight + m.capsuleRadius;
     this.position.set(0, 2, 0);
-  }
-
-  /** Wired after construction, once the combat services exist. */
-  attachCombat({ hitboxes, damage, lockOn }) {
-    this.hitboxes = hitboxes;
-    this.damage = damage;
-    this.lockOn = lockOn;
-    hitboxes.registerHurtbox(this, this.hurtbox);
   }
 
   /** Wired after construction; needs GameState, which needs the engine. */
@@ -197,10 +182,6 @@ export class PlayerController {
       // Roll cancels into roll only, and only once it has reached recovery.
       if (this.state === STATE.ROLL) return this.stateFrame >= TUNING.roll.recoveryStartFrame;
       if (this.state === STATE.BACKSTEP) return this.stateFrame >= 22;
-      if (this.state === STATE.DEFLECT) return this.stateFrame >= 18;
-      // An attack releases only at the very end of recovery. Chaining is
-      // handled separately and explicitly; it is not an escape.
-      if (this.state === STATE.ATTACK) return this.moveFrame >= this.currentMove.frames - 2;
       return false;
     }
     return true;
@@ -213,7 +194,6 @@ export class PlayerController {
       case STATE.BACKSTEP: return this.stateFrame >= 16;
       case STATE.LAND_HARD: return this.stateFrame >= 12;
       case STATE.LAND: return true;
-      case STATE.ATTACK: return this.moveFrame > this.currentMove.active[1];
       case STATE.DRINK: return this.stateFrame >= TUNING.health.flaskDrinkFrames - 12;
       default: return false;
     }
@@ -249,9 +229,6 @@ export class PlayerController {
       case 'heal':
         this.vitals.heal(TUNING.health.flaskHealAmount);
         break;
-      case 'criticalHit':
-        if (this.criticalTarget) this.damage?.resolveCritical(this, this.criticalTarget);
-        break;
       case 'foot':
         this.bus.emit(EVENTS.PLAYER_FOOTSTEP, {
           foot: ev.foot,
@@ -268,15 +245,9 @@ export class PlayerController {
   // ------------------------------------------------------------------- loop
 
   fixedUpdate(dt, ctx) {
-    // Hit stop scales the simulation for everything animated, which is what
-    // makes contact land. Physics still steps normally so nothing tunnels.
-    const scale = this.damage?.timeScale ?? 1;
-    const adt = dt * scale;
-
-    this.stateFrame += scale;
-    this.stamina.fixedUpdate(adt);
-    this.vitals.fixedUpdate(adt);
-    if (this.deflectBonusFrames > 0) this.deflectBonusFrames -= scale;
+    this.stateFrame += 1;
+    this.stamina.fixedUpdate(dt);
+    this.vitals.fixedUpdate(dt);
 
     if (this.state === STATE.DRIFT) {
       this.#updateDrift(dt);
@@ -285,38 +256,34 @@ export class PlayerController {
     }
 
     if (this.state === STATE.DEAD) {
-      this.anim.fixedUpdate(adt);
+      this.anim.fixedUpdate(dt);
       this.#updateMotion(dt);
       return;
     }
 
     // Flight replaces ground motion entirely when it is active. It is checked
     // before intent so a takeoff cannot be interleaved with a ground action.
-    const flying = this.flight?.fixedUpdate(adt) ?? false;
+    const flying = this.flight?.fixedUpdate(dt) ?? false;
     if (flying) {
       if (this.state !== STATE.FLIGHT) {
         this.setState(STATE.FLIGHT, { force: true });
         this.anim.play('fall', { fadeFrames: 6 });
       }
-      this.#integrate(adt);
-      this.anim.fixedUpdate(adt);
-      this.alignment?.update(adt, { flying: true, flapPhase: this.flight.flapPhase });
+      this.#integrate(dt);
+      this.anim.fixedUpdate(dt);
+      this.alignment?.update(dt, { flying: true, flapPhase: this.flight.flapPhase });
       this.flight.applyPose(this.root);
-      this.hurtbox.update();
       return;
     }
     if (this.state === STATE.FLIGHT) this.setState(this.grounded ? STATE.LAND : STATE.AIRBORNE, { force: true });
 
     this.#readIntent(ctx.frame);
-    this.#updateGuard(dt);
     this.#updateFacing(dt);
-    this.#updateMotion(adt);
-    this.anim.fixedUpdate(adt);
-    this.#updateCombatFrames();
+    this.#updateMotion(dt);
+    this.anim.fixedUpdate(dt);
     this.#updateAnimationState();
-    this.alignment?.update(adt, { flying: false });
+    this.alignment?.update(dt, { flying: false });
     this.flight?.applyPose(this.root);
-    this.hurtbox.update();
   }
 
   // ------------------------------------------------------------- beat 1: void
@@ -363,21 +330,6 @@ export class PlayerController {
       else if (this.#inRecovery()) this.buffer.push(ACTION.DODGE, inp.move, frame);
     }
 
-    // --- attacks ---------------------------------------------------------
-    for (const [action, kind] of [[ACTION.LIGHT_ATTACK, 'light'], [ACTION.HEAVY_ATTACK, 'heavy']]) {
-      if (!inp.actions[action].pressed) continue;
-      if (this.state === STATE.ATTACK) {
-        // Chaining is not cancelling. The input is remembered and the NEXT
-        // move begins when this one's chain window opens, inside recovery.
-        const m = this.currentMove;
-        if (m.chainInto?.[kind] && this.moveFrame >= m.active[1]) this.chainQueued = kind;
-      } else if (this.canAct()) {
-        this.#tryAttack(kind);
-      } else if (this.#inRecovery()) {
-        this.buffer.push(action, inp.move, frame);
-      }
-    }
-
     // --- flask -----------------------------------------------------------
     if (inp.actions[ACTION.USE_ITEM].pressed) {
       if (this.canAct()) this.#tryDrink();
@@ -385,13 +337,11 @@ export class PlayerController {
     }
 
     // --- drain the buffer -------------------------------------------------
-    if (this.canAct() && this.state !== STATE.ATTACK) {
+    if (this.canAct()) {
       const queued = this.buffer.peek(frame);
       if (queued) {
         this.buffer.consume(frame);
         if (queued.action === ACTION.DODGE) this.#tryDodge(queued.move);
-        else if (queued.action === ACTION.LIGHT_ATTACK) this.#tryAttack('light');
-        else if (queued.action === ACTION.HEAVY_ATTACK) this.#tryAttack('heavy');
         else if (queued.action === ACTION.USE_ITEM) this.#tryDrink();
       }
     }
@@ -405,6 +355,11 @@ export class PlayerController {
   #tryDodge(moveOverride = null) {
     if (!this.grounded && this.coyoteFrames <= 0) return;
     if (!this.stamina.canAct) return;
+    // Landing recovery. CONTROLS.md has always documented this window as
+    // "cannot attack or roll during this", and it was never actually enforced
+    // — `jumpRecoveryFrames` was read by nothing. Rolling out of a landing on
+    // frame one is exactly the kind of escape hatch this genre does not have.
+    if (this.state === STATE.LAND && this.stateFrame < TUNING.movement.jumpRecoveryFrames) return;
 
     // Direction is captured HERE, at the press, and never re-read during the
     // animation. A roll is a deliberate read of the stick at input time.
@@ -444,191 +399,6 @@ export class PlayerController {
     this.anim.play('roll', { fadeFrames: 2 });
   }
 
-  // --------------------------------------------------------------- attacks
-
-  #tryAttack(kind) {
-    if (!this.hasWeapon) return;
-    if (!this.grounded) return;
-    if (!this.stamina.canAct) return;
-
-    // A staggered target in front invites a critical instead of a normal swing.
-    if (kind === 'light') {
-      const target = this.#staggeredTargetInFront();
-      if (target) return this.#startCritical(target);
-    }
-    this.#startMove(OPENERS[kind]);
-  }
-
-  #startMove(moveId) {
-    const move = getMove(moveId);
-    if (!this.stamina.spend(move.staminaCost, 'attack')) return;
-
-    this.currentMove = move;
-    this.moveFrame = 0;
-    this.hitboxOpen = false;
-    this.chainQueued = null;
-    this.setState(STATE.ATTACK, { force: true });
-
-    // The dark branch swings faster; that speed is the compensation for its
-    // lower defence, and it applies to the clip and the frame data alike.
-    const speed = this.damage?.attackSpeedMultiplier ?? 1;
-    this.anim.play(move.clip, { fadeFrames: 3, speed });
-    this.bus.emit(EVENTS.ATTACK_STARTED, { entity: this, moveId });
-
-    // Snap toward the target so an attack does not whiff on a 5° error the
-    // player could not see. Only a snap, never tracking mid-swing.
-    if (this.lockTarget) {
-      _v.copy(this.lockTarget.position).sub(this.position);
-      this.targetFacing = Math.atan2(_v.x, _v.z);
-      this.facing = this.targetFacing;
-    } else if (Math.hypot(this.input.move.x, this.input.move.y) > 0.2) {
-      this.facing = this.targetFacing = this.#cameraRelativeYaw(this.input.move);
-    }
-  }
-
-  #startCritical(target) {
-    if (!this.stamina.spend(PLAYER_MOVES.critical.staminaCost, 'critical')) return;
-    this.criticalTarget = target;
-    this.currentMove = PLAYER_MOVES.critical;
-    this.moveFrame = 0;
-    this.setState(STATE.CRITICAL, { force: true });
-    this.anim.play('critical', { fadeFrames: 3 });
-    _v.copy(target.position).sub(this.position);
-    this.facing = this.targetFacing = Math.atan2(_v.x, _v.z);
-  }
-
-  #staggeredTargetInFront() {
-    if (!this.hitboxes) return null;
-    for (const [entity] of this.hitboxes.hurtboxes) {
-      if (entity === this || entity.faction === 'player') continue;
-      if (!entity.vitals?.staggered || !entity.vitals.alive) continue;
-      if (entity.criticalImmune) continue;
-      _v.copy(entity.position).sub(this.position);
-      if (_v.length() > 2.6) continue;
-      const angle = Math.atan2(_v.x, _v.z);
-      let delta = angle - this.facing;
-      while (delta > Math.PI) delta -= Math.PI * 2;
-      while (delta < -Math.PI) delta += Math.PI * 2;
-      if (Math.abs(delta) < THREE.MathUtils.degToRad(55)) return entity;
-    }
-    return null;
-  }
-
-  /** Drives the hitbox against the frame data. Runs after the animation steps. */
-  #updateCombatFrames() {
-    if (this.state === STATE.CRITICAL) {
-      this.moveFrame += this.damage?.timeScale ?? 1;
-      this.invulnerable = this.moveFrame >= PLAYER_MOVES.critical.invulnerable[0]
-        && this.moveFrame <= PLAYER_MOVES.critical.invulnerable[1];
-      if (this.moveFrame >= PLAYER_MOVES.critical.frames) {
-        this.invulnerable = false;
-        this.criticalTarget = null;
-        this.setState(STATE.IDLE);
-      }
-      return;
-    }
-    if (this.state !== STATE.ATTACK) return;
-
-    const move = this.currentMove;
-    this.moveFrame += (this.damage?.timeScale ?? 1) * (this.damage?.attackSpeedMultiplier ?? 1);
-
-    // Hyper-armor: poise damage is ignored for the declared window. You will
-    // still take the damage; you just will not be interrupted.
-    this.vitals.hyperArmor = move.hyperArmor
-      && this.moveFrame >= move.hyperArmorFrames[0]
-      && this.moveFrame <= move.hyperArmorFrames[1];
-
-    const shouldBeOpen = this.moveFrame >= move.active[0] && this.moveFrame <= move.active[1];
-    if (shouldBeOpen && !this.hitboxOpen) {
-      this.hitboxOpen = true;
-      const capsule = new BoundCapsule(move.hitbox).bind(this.rig);
-      this.hitboxes?.activate({
-        owner: this,
-        capsule,
-        move: this.#modifiedMove(move),
-        faction: 'player',
-        onHit: (entity, point, m) => this.damage?.resolve(this, entity, m, point),
-      });
-      this.bus.emit(EVENTS.ATTACK_ACTIVE, { entity: this, moveId: move.id });
-    } else if (!shouldBeOpen && this.hitboxOpen) {
-      this.hitboxOpen = false;
-      this.hitboxes?.deactivate(this);
-    }
-
-    // Chain: the queued input fires when the window opens, inside recovery.
-    if (this.chainQueued && move.chainWindow.length) {
-      const [from, to] = move.chainWindow;
-      if (this.moveFrame >= from && this.moveFrame <= to) {
-        const next = move.chainInto[this.chainQueued];
-        if (next) {
-          const kind = this.chainQueued;
-          this.chainQueued = null;
-          this.hitboxes?.deactivate(this);
-          this.hitboxOpen = false;
-          this.#startMove(next);
-          return;
-        }
-      }
-    }
-
-    if (this.moveFrame >= move.frames) {
-      this.hitboxes?.deactivate(this);
-      this.hitboxOpen = false;
-      this.vitals.hyperArmor = false;
-      this.bus.emit(EVENTS.ATTACK_RECOVERED, { entity: this, moveId: move.id });
-      this.currentMove = null;
-      this.setState(this.grounded ? STATE.IDLE : STATE.AIRBORNE);
-    }
-  }
-
-  /** Applies the deflect counter bonus, if one is live. */
-  #modifiedMove(move) {
-    if (this.deflectBonusFrames <= 0) return move;
-    this.deflectBonusFrames = 0;
-    return { ...move, damage: move.damage * this.deflectMultiplier, poiseDamage: move.poiseDamage * 1.5 };
-  }
-
-  // ----------------------------------------------------------------- guard
-
-  #updateGuard(dt) {
-    const inp = this.input;
-    const canGuard = this.hasWeapon
-      && !COMMITTED.has(this.state)
-      && this.grounded
-      && this.stamina.canAct;
-
-    if (this.guardState.deflectFramesLeft > 0) this.guardState.deflectFramesLeft--;
-
-    if (canGuard && inp.isDeflectInput() && this.guardState.deflectFramesLeft <= 0) {
-      // A deflect is a distinct, committed action with its own animation. It
-      // is not "guard, but better" — it has a window and a whiff cost.
-      this.guardState.active = true;
-      this.guardState.deflectFramesLeft = this.damage?.deflectWindowFrames ?? TUNING.combat.deflectWindowFrames;
-      this.setState(STATE.DEFLECT, { force: true });
-      this.anim.play('deflect', { fadeFrames: 1 });
-      return;
-    }
-
-    if (canGuard && inp.isGuarding()) {
-      this.guardState.active = true;
-      if (this.state !== STATE.GUARD && this.state !== STATE.DEFLECT) {
-        this.setState(STATE.GUARD);
-        this.anim.play('guard', { fadeFrames: 5 });
-      }
-    } else if (this.state === STATE.GUARD) {
-      this.guardState.active = false;
-      this.setState(STATE.IDLE);
-    } else if (this.state !== STATE.DEFLECT) {
-      this.guardState.active = false;
-    }
-
-    if (this.state === STATE.DEFLECT && this.stateFrame >= 26) {
-      this.guardState.active = inp.isGuarding();
-      this.setState(this.guardState.active ? STATE.GUARD : STATE.IDLE);
-      if (this.guardState.active) this.anim.play('guard', { fadeFrames: 4 });
-    }
-  }
-
   // ----------------------------------------------------------------- flask
 
   #tryDrink() {
@@ -646,19 +416,17 @@ export class PlayerController {
 
   // -------------------------------------------------------- damage received
 
-  /** Called by DamageSystem's events, not directly by attackers. */
-  onDamaged({ staggered, died }) {
+  /**
+   * Damage arriving from anywhere — currently only a hard landing, since the
+   * damage system is out. Kept whole because the death/respawn loop below is
+   * what a fall is *for*, and it is the one consequence the movement sandbox
+   * still has.
+   */
+  onDamaged({ died }) {
     if (died) return this.die();
-    if (staggered) {
-      this.setState(STATE.STAGGER, { force: true });
-      this.anim.play('stagger', { fadeFrames: 2 });
-      this.hitboxes?.deactivate(this);
-      this.hitboxOpen = false;
-      return;
-    }
     // A light hit plays on the upper-body layer only, so the legs keep running.
-    // A full-body flinch on chip damage reads as a stun and stops the fight.
-    if (!COMMITTED.has(this.state) || this.state === STATE.ATTACK) {
+    // A full-body flinch on chip damage reads as a stun and stops the game.
+    if (!COMMITTED.has(this.state)) {
       this.anim.play('hitLight', {
         layer: 'upper',
         mask: ['spine', 'chest', 'neck', 'head', 'shoulder', 'upperArm', 'lowerArm', 'hand'],
@@ -672,8 +440,6 @@ export class PlayerController {
     this.setState(STATE.DEAD, { force: true });
     this.anim.play('death', { fadeFrames: 2 });
     this.anim.stopLayer('upper', 2);
-    this.hitboxes?.deactivate(this);
-    this.guardState.active = false;
     this.invulnerable = true;
     this.bus.emit(EVENTS.PLAYER_DIED, { position: this.position.clone() });
   }
@@ -683,8 +449,6 @@ export class PlayerController {
     this.stamina.refill();
     this.refillFlask();
     this.invulnerable = false;
-    this.currentMove = null;
-    this.chainQueued = null;
     this.buffer.clear();
     this.facing = this.targetFacing = facing;
     this.root.rotation.y = facing;
@@ -771,11 +535,35 @@ export class PlayerController {
     const inp = this.input;
     const mag = Math.min(1, Math.hypot(inp.move.x, inp.move.y));
     if (mag < 0.001) return 0;
-    if (this.state === STATE.GUARD) return m.walkSpeed * 0.72; // guarding is slow
     const wantsSprint = inp.actions[ACTION.SPRINT].held && mag > 0.7
       && this.stamina.canAct && !this.stamina.exhausted;
-    if (wantsSprint) return m.sprintSpeed;
-    return THREE.MathUtils.lerp(m.walkSpeed * 0.55, m.runSpeed, Math.min(1, mag));
+    const base = wantsSprint
+      ? m.sprintSpeed
+      : THREE.MathUtils.lerp(m.walkSpeed * 0.55, m.runSpeed, Math.min(1, mag));
+    return base * this.#slopeSpeedScale();
+  }
+
+  /**
+   * Uphill costs speed; downhill does not give it back.
+   *
+   * `groundNormal` was declared in this class and never written or read, so
+   * every slope in the chapter walked exactly like flat ground — which is a
+   * strange thing for a chapter whose entire shape is a descent. Now that the
+   * floor is analytic ramps rather than a sampled trimesh, the normal is
+   * stable enough to drive feel off.
+   *
+   * Downhill deliberately does NOT speed the player up: free acceleration on a
+   * decline reads as losing control, and this chapter is one long decline.
+   */
+  #slopeSpeedScale() {
+    if (!this.grounded) return 1;
+    const m = TUNING.movement;
+    // The component of the facing direction that points uphill. Positive when
+    // climbing, negative when descending.
+    const climb = -(Math.sin(this.facing) * this.groundNormal.x
+      + Math.cos(this.facing) * this.groundNormal.z);
+    if (climb <= 0) return 1;
+    return THREE.MathUtils.lerp(1, m.slopeSpeedUphill, Math.min(1, climb / 0.6));
   }
 
   #updateMotion(dt) {
@@ -835,6 +623,7 @@ export class PlayerController {
 
     const wasGrounded = this.grounded;
     this.grounded = this.controller.computedGrounded();
+    this.#readContacts();
 
     const t = this.body.translation();
     const nx = t.x + corrected.x;
@@ -843,13 +632,62 @@ export class PlayerController {
     this.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
     this.position.set(nx, ny - this.capsuleOffset, nz);
 
-    if (Math.abs(corrected.x) < Math.abs(_v.x) * 0.5) this.velocity.x *= 0.2;
-    if (Math.abs(corrected.z) < Math.abs(_v.z) * 0.5) this.velocity.z *= 0.2;
+    // Wall scrub: when a wall stops you, most of your speed into it should go
+    // with it, or you peel along the surface at full pace and it reads as ice.
+    //
+    // This used to fire on *any* axis the controller shortened by more than
+    // half — which includes every legitimate step-up and every slope climb,
+    // because autostep and slope resolution both return less horizontal motion
+    // than was asked for. Walking up stairs cut your speed to a fifth on the
+    // frame each step was cleared, which is the stutter that made the descent
+    // feel bad. Now it needs an actual near-vertical surface in contact.
+    if (this.wallContact) {
+      if (Math.abs(corrected.x) < Math.abs(_v.x) * 0.5) this.velocity.x *= 0.2;
+      if (Math.abs(corrected.z) < Math.abs(_v.z) * 0.5) this.velocity.z *= 0.2;
+    }
 
     if (resolveLanding) this.#resolveGroundTransitions(wasGrounded);
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.facing;
+  }
+
+  /**
+   * Reads what the capsule actually touched this step: the ground's normal,
+   * and whether anything near-vertical is in the way.
+   *
+   * `normal1` is the *collider's* normal — the surface the character hit —
+   * which is the one that describes the world. `normal2` is the character
+   * capsule's own and points back the other way.
+   */
+  #readContacts() {
+    // Allocated once, on the first step, and refilled in place thereafter.
+    // Rapier allocates a fresh CharacterCollision per call when `out` is
+    // omitted, and this runs for every contact of every fixed step.
+    if (!_collision) _collision = new this.physics.RAPIER.CharacterCollision();
+    const n = this.controller.numComputedCollisions();
+    this.wallContact = false;
+    let bestUp = -1;
+    for (let i = 0; i < n; i++) {
+      const hit = this.controller.computedCollision(i, _collision);
+      if (!hit) continue;
+      const ny = hit.normal1.y;
+      // A surface counts as a wall once it is too steep to stand on. Reusing
+      // the climb limit means "wall" and "cannot walk up this" are the same
+      // question, answered once.
+      if (Math.abs(ny) < _maxSlopeCos) this.wallContact = true;
+      if (ny > bestUp) {
+        bestUp = ny;
+        _groundHit.set(hit.normal1.x, ny, hit.normal1.z);
+      }
+    }
+    if (bestUp > _maxSlopeCos) this.groundNormal.copy(_groundHit).normalize();
+    else if (this.grounded) this.groundNormal.set(0, 1, 0);
+  }
+
+  /** Ground steepness in degrees. Read by the debug inspector. */
+  get slopeAngle() {
+    return THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(this.groundNormal.y, -1, 1)));
   }
 
   #waterSpeedScale() {
@@ -923,17 +761,10 @@ export class PlayerController {
       case STATE.DRINK:
         if (this.stateFrame >= TUNING.health.flaskDrinkFrames) this.setState(STATE.IDLE);
         return;
-      case STATE.STAGGER:
-        if (this.stateFrame >= TUNING.health.staggerFrames) this.setState(STATE.IDLE);
-        return;
       case STATE.JUMP_START:
       case STATE.AIRBORNE:
       case STATE.STAND_UP:
       case STATE.CORPSE:
-      case STATE.ATTACK:
-      case STATE.CRITICAL:
-      case STATE.GUARD:
-      case STATE.DEFLECT:
       case STATE.DEAD:
         return;
     }
@@ -1057,4 +888,31 @@ export class PlayerController {
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
   }
+}
+
+/**
+ * The held sword.
+ *
+ * Inert geometry parented to the hand bone. Combat is out this phase, but the
+ * sword is beat 5 of the chapter and a beat that hands the player nothing they
+ * can see is a beat they will not believe happened — so the pickup still puts
+ * a visible blade in the hand, it just does not swing yet.
+ */
+function buildHeldSword() {
+  const g = new THREE.Group();
+  const steel = toonMaterial({ color: 0xa8b0b8, bands: 4, rimStrength: 0.7, rimPower: 3.2 });
+  const wood = toonMaterial({ color: 0x6b5138, bands: 3, rimStrength: 0.36 });
+
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.98, 0.028), steel);
+  blade.position.y = 0.62;
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.055, 0.065), steel);
+  guard.position.y = 0.12;
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.24, 0.062), wood);
+  const pommel = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, 0.09), steel);
+  pommel.position.y = -0.15;
+
+  g.add(blade, guard, grip, pommel);
+  // Held down the forearm rather than straight up out of the fist.
+  g.rotation.set(-0.15, 0, 0.08);
+  return g;
 }

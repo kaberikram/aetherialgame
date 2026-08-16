@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { EVENTS } from '../core/EventBus.js';
 import { StarChamberArena } from './StarChamberArena.js';
 import { FogGate } from './FogGate.js';
-import { BossController } from '../ai/BossController.js';
+import { BossStub } from './BossStub.js';
 import { WingChoice } from '../narrative/WingChoice.js';
+import { BEAT } from '../narrative/Beats.js';
 
 /**
  * BossEncounter — ties the arena, the gate, the boss and the retry loop
@@ -24,13 +25,15 @@ export class BossEncounter {
 
     this.arena = new StarChamberArena(engine, { center, radius }).build();
 
-    this.boss = new BossController(engine, {
+    // A stub while combat is out — see BossStub for why the link stays in the
+    // chain rather than being cut out of it.
+    this.boss = new BossStub(engine, {
       // Seated slightly below the surface line: it is a thing that lives in
-      // the pool, and legs ending exactly at the water plane read as hovering.
+      // the pool, and a body ending exactly at the water plane reads as
+      // hovering.
       position: center.clone().setY(center.y - 0.34),
       arena: this.arena,
     });
-    this.boss.register(engine.resolve('hitboxes'), engine.resolve('lockOn'));
 
     this.gate = new FogGate(engine, {
       position: center.clone().add(new THREE.Vector3(0, 0, radius + 2.6)),
@@ -48,6 +51,7 @@ export class BossEncounter {
 
   #startFight() {
     this.active = true;
+    this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.BOSS });
     this.boss.engage();
     // Confine the camera to the arena for the duration. The dais rim is
     // stonework the camera must not end up behind.
@@ -91,9 +95,14 @@ export class BossEncounter {
       player: this.player,
       alignment: this.player.alignment,
     });
+    this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.WINGS });
     this.wingChoice.onResolved = (variant) => {
       this.player.flight?.unlock();
       this.engine.resolve('state').setFlag('wingsResolved');
+      // Beat 8. `onWingsResolved` was assigned by nothing, so the chapter had
+      // no ending beat at all — the exit fired only in the sense that the
+      // player could now fly out of a hole.
+      this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.EXIT });
       this.onWingsResolved?.(variant);
     };
     this.wingChoice.begin();
@@ -115,6 +124,11 @@ export class BossEncounter {
   update(dt) {
     this.arena.update(dt);
     this.gate.update(dt);
+  }
+
+  /** ZoneManager tells the arena when it is on screen; see StarChamberArena. */
+  setArenaActive(on) {
+    this.arena.active = on;
   }
 
   /** Debug: skip straight to the wing choice. */
