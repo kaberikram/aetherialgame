@@ -160,6 +160,21 @@ export class StarChamberArena {
 
     this.#buildWater();
     this.#buildStar();
+
+    // Say which of these surfaces are decoration.
+    //
+    // The basin is the only mesh in the arena with a collider under it — the
+    // dais rings, the stupas, the water plane and the star are drawn and never
+    // collided with, and the containment ring is the reverse, colliders with no
+    // meshes at all. `ZoneBuilder` marks this for everything it builds, but the
+    // arena is assembled straight onto the scene, so it has to say so itself.
+    //
+    // Without it the collision audit compares the basin collider against the
+    // water surface floating 6cm above it and reports the whole pool as drift.
+    this.group.traverse((o) => { o.userData.noCollide = true; });
+    this.floorMesh = floorMesh;
+    floorMesh.userData.noCollide = false;
+
     return this;
   }
 

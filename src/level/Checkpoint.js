@@ -72,6 +72,11 @@ export class CheckpointSystem {
     light.position.y = 1.0;
     group.add(light);
 
+    // Drawn, never collided with — you walk through a checkpoint, you do not
+    // step over it. Saying so keeps the collision audit from reading the 26cm
+    // marker base as the floor and reporting it as collider drift.
+    group.traverse((o) => { o.userData.noCollide = true; });
+
     this.scene.add(group);
     const cp = { id, position: position.clone(), facing, group, flame, light };
     this.checkpoints.set(id, cp);

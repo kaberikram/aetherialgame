@@ -296,6 +296,14 @@ async function main() {
     lockOn, hitboxes, damage,
     alignment: engine.resolve('alignment'), pigeon, STATE,
     renderer, quality, audio: engine.resolve('audio'), debug,
+    // The tools need to build Vectors and Raycasters inside the page. Exposing
+    // the module rather than re-importing it in every harness keeps them
+    // pinned to the same three.js the game is running.
+    THREE,
+    // The audits measure the capsule against the level. Handing them the live
+    // table means a tuning edit cannot silently leave a harness measuring a
+    // body the game stopped having.
+    TUNING,
   };
 }
 

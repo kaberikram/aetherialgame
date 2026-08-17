@@ -118,6 +118,24 @@ function buildTunnel(ctx, WAYPOINTS) {
     8, 1.0, m.descentFloor
   );
 
+  // The crawl.
+  //
+  // Crouch needs somewhere to crouch or it is a button that changes nothing,
+  // and this is the honest place for it: the lower route is where you end up
+  // having *missed* the jump, so the chapter teaches the verb at the moment it
+  // is already telling you that you got something wrong. Roughly 1.25m of
+  // clearance against a 1.68m standing capsule and a 1.16m crouched one — you
+  // cannot walk it and you cannot fail to notice why.
+  //
+  // The slab hangs BELOW the line passed to `ramp`, so the line sits at the
+  // clearance plus the thickness.
+  ctx.ramp(
+    new THREE.Vector3(-0.98, -11.79 + 1.25 + 1.0, 13.0),
+    new THREE.Vector3(0.51, -12.89 + 1.25 + 1.0, 9.0),
+    7, 1.0, m.shell,
+    { castShadow: false }
+  );
+
   buildShell(ctx);
   buildCamp(ctx, new THREE.Vector3(-3.0, -5.4, 19.5));
 }

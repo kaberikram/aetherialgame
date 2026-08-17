@@ -8,6 +8,20 @@ const _up = new THREE.Vector3();
 const _euler = new THREE.Euler();
 
 /**
+ * Flags a subtree as decoration — drawn, never collided with.
+ *
+ * The builder is the only place that knows whether a mesh got a collider, so it
+ * is the only place that can say so honestly. Harnesses that compare the physics
+ * world against the scene graph need to know which meshes were never meant to
+ * agree, and the alternative is every harness maintaining its own list of props
+ * by name, which rots the first time a zone gains a rock.
+ */
+function markNoCollide(object) {
+  object.traverse((o) => { o.userData.noCollide = true; });
+  return object;
+}
+
+/**
  * ZoneBuilder — the construction context every zone module receives.
  *
  * Owns: the per-zone scene subgroups, static collider registration, and the
@@ -71,6 +85,7 @@ export class ZoneBuilder {
   /** Parents an object into the active zone group without collision. */
   add(object) {
     this.group.add(object);
+    markNoCollide(object);
     return object;
   }
 
@@ -93,6 +108,8 @@ export class ZoneBuilder {
       this.physics.addStaticBox(size, position,
         opts.rotation ? new THREE.Quaternion().setFromEuler(opts.rotation) : null,
         { group: opts.group ?? FILTERS.world });
+    } else {
+      markNoCollide(mesh);
     }
     return mesh;
   }
@@ -142,6 +159,8 @@ export class ZoneBuilder {
     if (opts.collide !== false) {
       this.physics.addStaticBox(size, mesh.position, mesh.quaternion,
         { group: opts.group ?? FILTERS.world });
+    } else {
+      markNoCollide(mesh);
     }
     return mesh;
   }
