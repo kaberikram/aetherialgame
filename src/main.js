@@ -8,6 +8,10 @@ import { PhysicsWorld } from './physics/PhysicsWorld.js';
 import { InputSystem } from './input/InputSystem.js';
 import { PlayerController, STATE } from './character/PlayerController.js';
 import { CameraRig } from './character/CameraRig.js';
+import { LockOn } from './combat/LockOn.js';
+import { HitboxSystem } from './combat/HitboxSystem.js';
+import { DamageSystem } from './combat/DamageSystem.js';
+import { TrainingDummy } from './combat/TrainingDummy.js';
 import { Chapter1, WAYPOINTS } from './level/Chapter1.js';
 import { ZoneManager } from './level/ZoneManager.js';
 import { CheckpointSystem } from './level/Checkpoint.js';
@@ -23,6 +27,7 @@ import { StatsOverlay } from './debug/StatsOverlay.js';
 import { StateInspector } from './debug/StateInspector.js';
 import { GamepadOverlay } from './debug/GamepadOverlay.js';
 import { ColliderView } from './debug/ColliderView.js';
+import { CombatInspector } from './debug/CombatInspector.js';
 import { FreeCam } from './debug/FreeCam.js';
 import { TUNING } from './tuning.js';
 
@@ -71,7 +76,15 @@ async function main() {
   boot.step(58, 'body');
   const player = engine.provide('player', new PlayerController(engine));
   const cameraRig = engine.provide('camera', new CameraRig(engine, player));
+  const lockOn = engine.provide('lockOn', new LockOn(engine, player));
+
+  boot.step(66, 'combat');
+  const hitboxes = engine.provide('hitboxes', new HitboxSystem(engine));
+  const damage = engine.provide('damage', new DamageSystem(engine));
+  player.attachCombat({ hitboxes, damage, lockOn });
   engine.provide('alignment', player.attachAlignment());
+  // No weapon at the start. It is found in the mud beside a dead warrior at
+  // beat 5, and combat is genuinely unavailable until then.
 
   // The chapter needs the player, so it is constructed after it and before the
   // encounter that sits inside it.
@@ -83,6 +96,17 @@ async function main() {
     center: WAYPOINTS.starChamber.clone(),
     radius: 15,
   }));
+
+  // Two posts beside the sword, so the first thing the chapter offers after
+  // beat 5 is something to hit. Combat feel is unjudgeable against nothing.
+  const dummies = [
+    new TrainingDummy(engine, WAYPOINTS.sword.clone().add(new THREE.Vector3(-3.4, 0, -2.6))),
+    new TrainingDummy(engine, WAYPOINTS.sword.clone().add(new THREE.Vector3(2.8, 0, -4.2))),
+  ];
+  for (const d of dummies) {
+    d.register(hitboxes, lockOn);
+    engine.add(d, STAGE.COMBAT + 5);
+  }
 
   const checkpoints = engine.provide('checkpoints', new CheckpointSystem(engine, player));
   checkpoints.add({ id: 'descent', position: WAYPOINTS.descentBottom.clone().setY(-13.6), facing: Math.PI });
@@ -129,6 +153,12 @@ async function main() {
 
   const hud = new HUD(engine, player);
 
+  // Damage lands on the player through events, so the controller never needs a
+  // reference to whatever hit it.
+  engine.bus.on(EVENTS.HIT_LANDED, (e) => {
+    if (e.victim === player) player.onDamaged(e);
+  });
+
   boot.step(90, 'the void');
   const intro = new VoidSequence(engine, player, cameraRig).build();
   intro.landingPosition = WAYPOINTS.embodiment.clone();
@@ -171,6 +201,9 @@ async function main() {
   engine.add(input, STAGE.INPUT);
   engine.add(intro, STAGE.NARRATIVE);
   engine.add(player, STAGE.CHARACTER);
+  engine.add(lockOn, STAGE.COMBAT);
+  engine.add(hitboxes, STAGE.COMBAT + 10);
+  engine.add(damage, STAGE.COMBAT + 20);
   engine.add(physics, STAGE.PHYSICS);
   engine.add(cameraRig, STAGE.CAMERA);
   engine.add(pigeon, STAGE.AI + 5);
@@ -182,9 +215,10 @@ async function main() {
   engine.add(hud, STAGE.UI);
   engine.add(new PauseMenu(engine), STAGE.UI + 5);
   engine.add(new StatsOverlay(engine, debug), STAGE.DEBUG);
-  engine.add(new StateInspector(engine, debug, player), STAGE.DEBUG);
+  engine.add(new StateInspector(engine, debug, player, lockOn), STAGE.DEBUG);
   engine.add(new GamepadOverlay(engine, debug, input, player), STAGE.DEBUG);
   engine.add(new ColliderView(engine, debug), STAGE.DEBUG);
+  engine.add(new CombatInspector(engine, debug, player, dummies), STAGE.DEBUG);
   // After the camera rig, so entering freecam overwrites the rig's transform
   // for the frame rather than being overwritten by it.
   engine.add(new FreeCam(engine, debug), STAGE.DEBUG + 5);
@@ -258,7 +292,8 @@ async function main() {
   window.__VESSEL_WAYPOINTS = WAYPOINTS;
   window.__VESSEL_API = {
     engine, player, intro, cameraRig, checkpoints, state, chapter, zones,
-    encounter, boss: encounter.boss, arena: encounter.arena,
+    encounter, boss: encounter.boss, arena: encounter.arena, dummies,
+    lockOn, hitboxes, damage,
     alignment: engine.resolve('alignment'), pigeon, STATE,
     renderer, quality, audio: engine.resolve('audio'), debug,
   };

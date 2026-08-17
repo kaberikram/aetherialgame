@@ -134,7 +134,10 @@ export class BossEncounter {
   /** Debug: skip straight to the wing choice. */
   forceWingChoice() {
     this.player.respawn(this.center.clone().setY(this.center.y + 0.4), Math.PI);
-    this.boss.alive = false;
+    // `alive` reads from vitals now, so kill it the way a sword would rather
+    // than assigning the flag — otherwise the debug path and the real path
+    // leave the boss in two different states.
+    this.boss.vitals.applyDamage(99999, 0, 'debug');
     this.boss.state = 'dead';
     this.boss.mesh.visible = false;
     this.#beginWingChoice();

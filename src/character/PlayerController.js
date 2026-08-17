@@ -7,21 +7,16 @@ import { buildCharacter } from './Rig.js';
 import { AnimationSystem } from './AnimationSystem.js';
 import { buildLocomotionClips } from './clips/gait.js';
 import { buildActionClips } from './clips/actions.js';
+import { buildAttackClips } from './clips/attacks.js';
 import { Stamina } from './Stamina.js';
 import { Vitals } from '../combat/Vitals.js';
+import { BoundCapsule, StaticCapsule } from '../combat/HitboxSystem.js';
+import { PLAYER_MOVES, OPENERS, getMove } from '../combat/data/playerMoves.js';
+import { buildSword } from './Weapon.js';
 import { Alignment } from './Alignment.js';
 import { Flight } from './Flight.js';
-import { toonMaterial } from '../render/npr/ToonMaterial.js';
+import { FILTERS } from '../physics/PhysicsWorld.js';
 
-/**
- * The state machine, trimmed to locomotion and narrative.
- *
- * Attack, guard, deflect, stagger and critical are gone with the combat
- * framework. They come back with it — the deletions were at the seams the
- * module contract already declared, not through them — but while the question
- * on the table is "does moving feel good", a state you cannot enter is a state
- * that only makes the machine harder to read.
- */
 export const STATE = Object.freeze({
   DRIFT: 'drift',         // beat 1: a formless light, weightless, no collision
   CORPSE: 'corpse',       // the body, before the light enters it
@@ -34,7 +29,13 @@ export const STATE = Object.freeze({
   LAND_HARD: 'landHard',
   ROLL: 'roll',
   BACKSTEP: 'backstep',
+  CROUCH: 'crouch',
+  ATTACK: 'attack',
+  GUARD: 'guard',
+  DEFLECT: 'deflect',
   DRINK: 'drink',
+  STAGGER: 'stagger',
+  CRITICAL: 'critical',
   DEAD: 'dead',
   FLIGHT: 'flight',
 });
@@ -42,11 +43,13 @@ export const STATE = Object.freeze({
 /** States that commit: input cannot pull the character out of them. */
 const COMMITTED = new Set([
   STATE.ROLL, STATE.BACKSTEP, STATE.LAND_HARD, STATE.JUMP_START, STATE.STAND_UP,
-  STATE.CORPSE, STATE.DRINK, STATE.DEAD,
+  STATE.CORPSE, STATE.ATTACK, STATE.DRINK, STATE.STAGGER, STATE.CRITICAL, STATE.DEAD,
+  STATE.DEFLECT,
 ]);
 /** States whose horizontal motion comes from the animation, not from input. */
 const ROOT_MOTION_STATES = new Set([
-  STATE.ROLL, STATE.BACKSTEP, STATE.STAND_UP, STATE.DEAD, STATE.DRINK,
+  STATE.ROLL, STATE.BACKSTEP, STATE.STAND_UP, STATE.ATTACK, STATE.STAGGER,
+  STATE.CRITICAL, STATE.DEAD, STATE.DRINK,
 ]);
 
 const _v = new THREE.Vector3();
@@ -104,9 +107,20 @@ export class PlayerController {
     });
     this.buffer = new InputBuffer();
 
-    this.flaskCharges = TUNING.health.flaskCharges;
+    // Guard state is read by DamageSystem. `deflectFramesLeft` is the narrow
+    // window inside a guard where an incoming hit becomes a deflect instead.
+    this.guardState = { active: false, deflectFramesLeft: 0 };
+    this.deflectBonusFrames = 0;
+    this.deflectMultiplier = 1;
 
-    /** Filled by LockOn when combat returns; the controller only reads it. */
+    this.flaskCharges = TUNING.health.flaskCharges;
+    this.currentMove = null;
+    this.moveFrame = 0;
+    this.hitboxOpen = false;
+    this.chainQueued = null;
+    this.criticalTarget = null;
+
+    /** Filled by LockOn; the controller only reads it. */
     this.lockTarget = null;
 
     this.#buildBody();
@@ -121,17 +135,17 @@ export class PlayerController {
     this.renderer.scene.add(this.root);
 
     // The sword is parented to the hand bone, so it follows the animation with
-    // no extra bookkeeping. It is inert until combat returns — the pickup is
-    // still a beat in the chapter, and a beat that hands you nothing visible
-    // is a beat the player will not believe happened.
-    this.sword = buildHeldSword();
+    // no extra bookkeeping and the hitbox capsule tracks the same bone.
+    this.sword = buildSword();
     this.sword.visible = false;
     rig.byName.get('hand.R').add(this.sword);
 
     this.anim = new AnimationSystem(rig, this.bus);
-    this.anim.register(...buildLocomotionClips(), ...buildActionClips());
+    this.anim.register(...buildLocomotionClips(), ...buildActionClips(), ...buildAttackClips());
     this.anim.onEvent = (ev) => this.#onAnimEvent(ev);
     this.anim.play('idle', { fadeFrames: 0 });
+
+    this.hurtbox = new StaticCapsule({ position: this.position, height: 1.68, radius: 0.34 });
 
     const m = TUNING.movement;
     const body = this.physics.createCharacter({
@@ -148,6 +162,14 @@ export class PlayerController {
     this.controller = body.controller;
     this.capsuleOffset = m.capsuleHalfHeight + m.capsuleRadius;
     this.position.set(0, 2, 0);
+  }
+
+  /** Wired after construction, once the combat services exist. */
+  attachCombat({ hitboxes, damage, lockOn }) {
+    this.hitboxes = hitboxes;
+    this.damage = damage;
+    this.lockOn = lockOn;
+    hitboxes.registerHurtbox(this, this.hurtbox);
   }
 
   /** Wired after construction; needs GameState, which needs the engine. */
@@ -182,6 +204,10 @@ export class PlayerController {
       // Roll cancels into roll only, and only once it has reached recovery.
       if (this.state === STATE.ROLL) return this.stateFrame >= TUNING.roll.recoveryStartFrame;
       if (this.state === STATE.BACKSTEP) return this.stateFrame >= 22;
+      if (this.state === STATE.DEFLECT) return this.stateFrame >= 18;
+      // An attack releases only at the very end of recovery. Chaining is
+      // handled separately and explicitly; it is not an escape.
+      if (this.state === STATE.ATTACK) return this.moveFrame >= this.currentMove.frames - 2;
       return false;
     }
     return true;
@@ -194,6 +220,7 @@ export class PlayerController {
       case STATE.BACKSTEP: return this.stateFrame >= 16;
       case STATE.LAND_HARD: return this.stateFrame >= 12;
       case STATE.LAND: return true;
+      case STATE.ATTACK: return this.moveFrame > this.currentMove.active[1];
       case STATE.DRINK: return this.stateFrame >= TUNING.health.flaskDrinkFrames - 12;
       default: return false;
     }
@@ -229,6 +256,9 @@ export class PlayerController {
       case 'heal':
         this.vitals.heal(TUNING.health.flaskHealAmount);
         break;
+      case 'criticalHit':
+        if (this.criticalTarget) this.damage?.resolveCritical(this, this.criticalTarget);
+        break;
       case 'foot':
         this.bus.emit(EVENTS.PLAYER_FOOTSTEP, {
           foot: ev.foot,
@@ -245,9 +275,15 @@ export class PlayerController {
   // ------------------------------------------------------------------- loop
 
   fixedUpdate(dt, ctx) {
-    this.stateFrame += 1;
-    this.stamina.fixedUpdate(dt);
-    this.vitals.fixedUpdate(dt);
+    // Hit stop scales the simulation for everything animated, which is what
+    // makes contact land. Physics still steps normally so nothing tunnels.
+    const scale = this.damage?.timeScale ?? 1;
+    const adt = dt * scale;
+
+    this.stateFrame += scale;
+    this.stamina.fixedUpdate(adt);
+    this.vitals.fixedUpdate(adt);
+    if (this.deflectBonusFrames > 0) this.deflectBonusFrames -= scale;
 
     if (this.state === STATE.DRIFT) {
       this.#updateDrift(dt);
@@ -256,34 +292,38 @@ export class PlayerController {
     }
 
     if (this.state === STATE.DEAD) {
-      this.anim.fixedUpdate(dt);
+      this.anim.fixedUpdate(adt);
       this.#updateMotion(dt);
       return;
     }
 
     // Flight replaces ground motion entirely when it is active. It is checked
     // before intent so a takeoff cannot be interleaved with a ground action.
-    const flying = this.flight?.fixedUpdate(dt) ?? false;
+    const flying = this.flight?.fixedUpdate(adt) ?? false;
     if (flying) {
       if (this.state !== STATE.FLIGHT) {
         this.setState(STATE.FLIGHT, { force: true });
         this.anim.play('fall', { fadeFrames: 6 });
       }
-      this.#integrate(dt);
-      this.anim.fixedUpdate(dt);
-      this.alignment?.update(dt, { flying: true, flapPhase: this.flight.flapPhase });
+      this.#integrate(adt);
+      this.anim.fixedUpdate(adt);
+      this.alignment?.update(adt, { flying: true, flapPhase: this.flight.flapPhase });
       this.flight.applyPose(this.root);
+      this.hurtbox.update();
       return;
     }
     if (this.state === STATE.FLIGHT) this.setState(this.grounded ? STATE.LAND : STATE.AIRBORNE, { force: true });
 
     this.#readIntent(ctx.frame);
+    this.#updateGuard(dt);
     this.#updateFacing(dt);
-    this.#updateMotion(dt);
-    this.anim.fixedUpdate(dt);
+    this.#updateMotion(adt);
+    this.anim.fixedUpdate(adt);
+    this.#updateCombatFrames();
     this.#updateAnimationState();
-    this.alignment?.update(dt, { flying: false });
+    this.alignment?.update(adt, { flying: false });
     this.flight?.applyPose(this.root);
+    this.hurtbox.update();
   }
 
   // ------------------------------------------------------------- beat 1: void
@@ -324,10 +364,38 @@ export class PlayerController {
     if (inp.actions[ACTION.JUMP].pressed) this.jumpBufferFrames = TUNING.movement.jumpBufferFrames;
     else if (this.jumpBufferFrames > 0) this.jumpBufferFrames--;
 
-    // --- dodge -----------------------------------------------------------
-    if (inp.actions[ACTION.DODGE].pressed) {
+    // --- dodge -------------------------------------------------------------
+    // Fires on the RELEASE edge, and only for a tap. Elden Ring shares this
+    // button with sprint, so a press on its own is ambiguous: it is a roll
+    // only once the player lets go without having held it long enough to
+    // sprint. `isDodgeTap()` is that test, and it is the reason the roll here
+    // costs the duration of your own tap in latency.
+    //
+    // Buffering still keys off the same edge, so a tap during recovery queues
+    // a roll and a hold during recovery queues nothing — which is right: you
+    // cannot buffer a sprint.
+    if (inp.isDodgeTap()) {
       if (this.canAct()) this.#tryDodge();
       else if (this.#inRecovery()) this.buffer.push(ACTION.DODGE, inp.move, frame);
+    }
+
+    // --- crouch ------------------------------------------------------------
+    // A toggle, not a hold: Elden Ring's L3 is "Crouch/Stand up".
+    if (inp.actions[ACTION.CROUCH].pressed) this.#toggleCrouch();
+
+    // --- attacks ---------------------------------------------------------
+    for (const [action, kind] of [[ACTION.LIGHT_ATTACK, 'light'], [ACTION.HEAVY_ATTACK, 'heavy']]) {
+      if (!inp.actions[action].pressed) continue;
+      if (this.state === STATE.ATTACK) {
+        // Chaining is not cancelling. The input is remembered and the NEXT
+        // move begins when this one's chain window opens, inside recovery.
+        const m = this.currentMove;
+        if (m.chainInto?.[kind] && this.moveFrame >= m.active[1]) this.chainQueued = kind;
+      } else if (this.canAct()) {
+        this.#tryAttack(kind);
+      } else if (this.#inRecovery()) {
+        this.buffer.push(action, inp.move, frame);
+      }
     }
 
     // --- flask -----------------------------------------------------------
@@ -337,11 +405,13 @@ export class PlayerController {
     }
 
     // --- drain the buffer -------------------------------------------------
-    if (this.canAct()) {
+    if (this.canAct() && this.state !== STATE.ATTACK) {
       const queued = this.buffer.peek(frame);
       if (queued) {
         this.buffer.consume(frame);
         if (queued.action === ACTION.DODGE) this.#tryDodge(queued.move);
+        else if (queued.action === ACTION.LIGHT_ATTACK) this.#tryAttack('light');
+        else if (queued.action === ACTION.HEAVY_ATTACK) this.#tryAttack('heavy');
         else if (queued.action === ACTION.USE_ITEM) this.#tryDrink();
       }
     }
@@ -355,6 +425,7 @@ export class PlayerController {
   #tryDodge(moveOverride = null) {
     if (!this.grounded && this.coyoteFrames <= 0) return;
     if (!this.stamina.canAct) return;
+    if (!this.#standIfCrouched()) return;
     // Landing recovery. CONTROLS.md has always documented this window as
     // "cannot attack or roll during this", and it was never actually enforced
     // — `jumpRecoveryFrames` was read by nothing. Rolling out of a landing on
@@ -399,6 +470,191 @@ export class PlayerController {
     this.anim.play('roll', { fadeFrames: 2 });
   }
 
+  // --------------------------------------------------------------- attacks
+
+  #tryAttack(kind) {
+    if (!this.hasWeapon) return;
+    if (!this.grounded) return;
+    if (!this.stamina.canAct) return;
+
+    // A staggered target in front invites a critical instead of a normal swing.
+    if (kind === 'light') {
+      const target = this.#staggeredTargetInFront();
+      if (target) return this.#startCritical(target);
+    }
+    this.#startMove(OPENERS[kind]);
+  }
+
+  #startMove(moveId) {
+    const move = getMove(moveId);
+    if (!this.stamina.spend(move.staminaCost, 'attack')) return;
+
+    this.currentMove = move;
+    this.moveFrame = 0;
+    this.hitboxOpen = false;
+    this.chainQueued = null;
+    this.setState(STATE.ATTACK, { force: true });
+
+    // The dark branch swings faster; that speed is the compensation for its
+    // lower defence, and it applies to the clip and the frame data alike.
+    const speed = this.damage?.attackSpeedMultiplier ?? 1;
+    this.anim.play(move.clip, { fadeFrames: 3, speed });
+    this.bus.emit(EVENTS.ATTACK_STARTED, { entity: this, moveId });
+
+    // Snap toward the target so an attack does not whiff on a 5° error the
+    // player could not see. Only a snap, never tracking mid-swing.
+    if (this.lockTarget) {
+      _v.copy(this.lockTarget.position).sub(this.position);
+      this.targetFacing = Math.atan2(_v.x, _v.z);
+      this.facing = this.targetFacing;
+    } else if (Math.hypot(this.input.move.x, this.input.move.y) > 0.2) {
+      this.facing = this.targetFacing = this.#cameraRelativeYaw(this.input.move);
+    }
+  }
+
+  #startCritical(target) {
+    if (!this.stamina.spend(PLAYER_MOVES.critical.staminaCost, 'critical')) return;
+    this.criticalTarget = target;
+    this.currentMove = PLAYER_MOVES.critical;
+    this.moveFrame = 0;
+    this.setState(STATE.CRITICAL, { force: true });
+    this.anim.play('critical', { fadeFrames: 3 });
+    _v.copy(target.position).sub(this.position);
+    this.facing = this.targetFacing = Math.atan2(_v.x, _v.z);
+  }
+
+  #staggeredTargetInFront() {
+    if (!this.hitboxes) return null;
+    for (const [entity] of this.hitboxes.hurtboxes) {
+      if (entity === this || entity.faction === 'player') continue;
+      if (!entity.vitals?.staggered || !entity.vitals.alive) continue;
+      if (entity.criticalImmune) continue;
+      _v.copy(entity.position).sub(this.position);
+      if (_v.length() > 2.6) continue;
+      const angle = Math.atan2(_v.x, _v.z);
+      let delta = angle - this.facing;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      if (Math.abs(delta) < THREE.MathUtils.degToRad(55)) return entity;
+    }
+    return null;
+  }
+
+  /** Drives the hitbox against the frame data. Runs after the animation steps. */
+  #updateCombatFrames() {
+    if (this.state === STATE.CRITICAL) {
+      this.moveFrame += this.damage?.timeScale ?? 1;
+      this.invulnerable = this.moveFrame >= PLAYER_MOVES.critical.invulnerable[0]
+        && this.moveFrame <= PLAYER_MOVES.critical.invulnerable[1];
+      if (this.moveFrame >= PLAYER_MOVES.critical.frames) {
+        this.invulnerable = false;
+        this.criticalTarget = null;
+        this.setState(STATE.IDLE);
+      }
+      return;
+    }
+    if (this.state !== STATE.ATTACK) return;
+
+    const move = this.currentMove;
+    this.moveFrame += (this.damage?.timeScale ?? 1) * (this.damage?.attackSpeedMultiplier ?? 1);
+
+    // Hyper-armor: poise damage is ignored for the declared window. You will
+    // still take the damage; you just will not be interrupted.
+    this.vitals.hyperArmor = move.hyperArmor
+      && this.moveFrame >= move.hyperArmorFrames[0]
+      && this.moveFrame <= move.hyperArmorFrames[1];
+
+    const shouldBeOpen = this.moveFrame >= move.active[0] && this.moveFrame <= move.active[1];
+    if (shouldBeOpen && !this.hitboxOpen) {
+      this.hitboxOpen = true;
+      const capsule = new BoundCapsule(move.hitbox).bind(this.rig);
+      this.hitboxes?.activate({
+        owner: this,
+        capsule,
+        move: this.#modifiedMove(move),
+        faction: 'player',
+        onHit: (entity, point, m) => this.damage?.resolve(this, entity, m, point),
+      });
+      this.bus.emit(EVENTS.ATTACK_ACTIVE, { entity: this, moveId: move.id });
+    } else if (!shouldBeOpen && this.hitboxOpen) {
+      this.hitboxOpen = false;
+      this.hitboxes?.deactivate(this);
+    }
+
+    // Chain: the queued input fires when the window opens, inside recovery.
+    if (this.chainQueued && move.chainWindow.length) {
+      const [from, to] = move.chainWindow;
+      if (this.moveFrame >= from && this.moveFrame <= to) {
+        const next = move.chainInto[this.chainQueued];
+        if (next) {
+          const kind = this.chainQueued;
+          this.chainQueued = null;
+          this.hitboxes?.deactivate(this);
+          this.hitboxOpen = false;
+          this.#startMove(next);
+          return;
+        }
+      }
+    }
+
+    if (this.moveFrame >= move.frames) {
+      this.hitboxes?.deactivate(this);
+      this.hitboxOpen = false;
+      this.vitals.hyperArmor = false;
+      this.bus.emit(EVENTS.ATTACK_RECOVERED, { entity: this, moveId: move.id });
+      this.currentMove = null;
+      this.setState(this.grounded ? STATE.IDLE : STATE.AIRBORNE);
+    }
+  }
+
+  /** Applies the deflect counter bonus, if one is live. */
+  #modifiedMove(move) {
+    if (this.deflectBonusFrames <= 0) return move;
+    this.deflectBonusFrames = 0;
+    return { ...move, damage: move.damage * this.deflectMultiplier, poiseDamage: move.poiseDamage * 1.5 };
+  }
+
+  // ----------------------------------------------------------------- guard
+
+  #updateGuard(dt) {
+    const inp = this.input;
+    const canGuard = this.hasWeapon
+      && !COMMITTED.has(this.state)
+      && this.grounded
+      && this.stamina.canAct;
+
+    if (this.guardState.deflectFramesLeft > 0) this.guardState.deflectFramesLeft--;
+
+    if (canGuard && inp.isDeflectInput() && this.guardState.deflectFramesLeft <= 0) {
+      // A deflect is a distinct, committed action with its own animation. It
+      // is not "guard, but better" — it has a window and a whiff cost.
+      this.guardState.active = true;
+      this.guardState.deflectFramesLeft = this.damage?.deflectWindowFrames ?? TUNING.combat.deflectWindowFrames;
+      this.setState(STATE.DEFLECT, { force: true });
+      this.anim.play('deflect', { fadeFrames: 1 });
+      return;
+    }
+
+    if (canGuard && inp.isGuarding()) {
+      this.guardState.active = true;
+      if (this.state !== STATE.GUARD && this.state !== STATE.DEFLECT) {
+        this.setState(STATE.GUARD);
+        this.anim.play('guard', { fadeFrames: 5 });
+      }
+    } else if (this.state === STATE.GUARD) {
+      this.guardState.active = false;
+      this.setState(STATE.IDLE);
+    } else if (this.state !== STATE.DEFLECT) {
+      this.guardState.active = false;
+    }
+
+    if (this.state === STATE.DEFLECT && this.stateFrame >= 26) {
+      this.guardState.active = inp.isGuarding();
+      this.setState(this.guardState.active ? STATE.GUARD : STATE.IDLE);
+      if (this.guardState.active) this.anim.play('guard', { fadeFrames: 4 });
+    }
+  }
+
   // ----------------------------------------------------------------- flask
 
   #tryDrink() {
@@ -416,17 +672,19 @@ export class PlayerController {
 
   // -------------------------------------------------------- damage received
 
-  /**
-   * Damage arriving from anywhere — currently only a hard landing, since the
-   * damage system is out. Kept whole because the death/respawn loop below is
-   * what a fall is *for*, and it is the one consequence the movement sandbox
-   * still has.
-   */
-  onDamaged({ died }) {
+  /** Called by DamageSystem's events, not directly by attackers. */
+  onDamaged({ staggered, died }) {
     if (died) return this.die();
+    if (staggered) {
+      this.setState(STATE.STAGGER, { force: true });
+      this.anim.play('stagger', { fadeFrames: 2 });
+      this.hitboxes?.deactivate(this);
+      this.hitboxOpen = false;
+      return;
+    }
     // A light hit plays on the upper-body layer only, so the legs keep running.
-    // A full-body flinch on chip damage reads as a stun and stops the game.
-    if (!COMMITTED.has(this.state)) {
+    // A full-body flinch on chip damage reads as a stun and stops the fight.
+    if (!COMMITTED.has(this.state) || this.state === STATE.ATTACK) {
       this.anim.play('hitLight', {
         layer: 'upper',
         mask: ['spine', 'chest', 'neck', 'head', 'shoulder', 'upperArm', 'lowerArm', 'hand'],
@@ -440,6 +698,8 @@ export class PlayerController {
     this.setState(STATE.DEAD, { force: true });
     this.anim.play('death', { fadeFrames: 2 });
     this.anim.stopLayer('upper', 2);
+    this.hitboxes?.deactivate(this);
+    this.guardState.active = false;
     this.invulnerable = true;
     this.bus.emit(EVENTS.PLAYER_DIED, { position: this.position.clone() });
   }
@@ -449,6 +709,12 @@ export class PlayerController {
     this.stamina.refill();
     this.refillFlask();
     this.invulnerable = false;
+    // Stand up. Dying crouched would otherwise respawn you with a half-height
+    // capsule and no way to notice until a ceiling did not stop you.
+    if (this.state === STATE.CROUCH) this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+    this.root.scale.y = 1;
+    this.currentMove = null;
+    this.chainQueued = null;
     this.buffer.clear();
     this.facing = this.targetFacing = facing;
     this.root.rotation.y = facing;
@@ -458,9 +724,68 @@ export class PlayerController {
     this.bus.emit(EVENTS.PLAYER_RESPAWNED, { position });
   }
 
+  // ---------------------------------------------------------------- crouch
+
+  /**
+   * Crouch/stand, as a toggle.
+   *
+   * The capsule is genuinely resized rather than the mesh being scaled down,
+   * so a low passage is low for the physics too — a crouch that only changes
+   * what you look like is a crouch that does nothing.
+   *
+   * Standing is REFUSED when there is no headroom. Without that check the
+   * capsule grows inside a ceiling and Rapier resolves the overlap by
+   * ejecting the player through it, which is the single most obvious way a
+   * crouch implementation breaks.
+   */
+  #toggleCrouch() {
+    if (this.state === STATE.CROUCH) {
+      if (!this.#hasHeadroom()) return;
+      this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+      this.setState(STATE.IDLE, { force: true });
+      return;
+    }
+    if (!this.grounded || COMMITTED.has(this.state)) return;
+    this.#setCapsuleHeight(TUNING.movement.crouchHalfHeight);
+    this.setState(STATE.CROUCH, { force: true });
+    this.anim.play('idle', { fadeFrames: 6 });
+  }
+
+  /** True when the standing capsule would fit where the crouched one is. */
+  #hasHeadroom() {
+    const m = TUNING.movement;
+    const standing = m.capsuleHalfHeight + m.capsuleRadius;
+    const crouched = m.crouchHalfHeight + m.capsuleRadius;
+    _v.copy(this.position).setY(this.position.y + crouched * 2);
+    const hit = this.physics.raycast(_v, _up, (standing - crouched) * 2 + 0.1, { groups: FILTERS.camera });
+    return hit === null;
+  }
+
+  #setCapsuleHeight(halfHeight) {
+    this.collider.setHalfHeight(halfHeight);
+    const offset = halfHeight + TUNING.movement.capsuleRadius;
+    // The body's translation is the capsule CENTRE; `position` is the feet.
+    // Resizing about the centre would sink or launch the player by the
+    // difference, so the body is re-placed from the feet instead.
+    this.capsuleOffset = offset;
+    this.body.setTranslation(
+      { x: this.position.x, y: this.position.y + offset, z: this.position.z },
+      true
+    );
+  }
+
+  /** Crouching stands you up rather than being refused outright. */
+  #standIfCrouched() {
+    if (this.state !== STATE.CROUCH) return true;
+    if (!this.#hasHeadroom()) return false;
+    this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+    return true;
+  }
+
   // ------------------------------------------------------------------ jump
 
   #startJump() {
+    if (!this.#standIfCrouched()) return;
     this.setState(STATE.JUMP_START);
     this.anim.play('jumpStart', { fadeFrames: 3 });
   }
@@ -535,7 +860,9 @@ export class PlayerController {
     const inp = this.input;
     const mag = Math.min(1, Math.hypot(inp.move.x, inp.move.y));
     if (mag < 0.001) return 0;
-    const wantsSprint = inp.actions[ACTION.SPRINT].held && mag > 0.7
+    if (this.state === STATE.GUARD) return m.walkSpeed * 0.72; // guarding is slow
+    if (this.state === STATE.CROUCH) return m.walkSpeed * m.crouchSpeedScale;
+    const wantsSprint = inp.isSprinting() && mag > 0.7
       && this.stamina.canAct && !this.stamina.exhausted;
     const base = wantsSprint
       ? m.sprintSpeed
@@ -650,6 +977,15 @@ export class PlayerController {
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.facing;
+
+    // Sink the mesh with the capsule. Without this the character stands at
+    // full height inside a half-height collider and visibly clips ceilings the
+    // physics is correctly keeping them under.
+    const m = TUNING.movement;
+    const wantSquash = this.state === STATE.CROUCH
+      ? (m.crouchHalfHeight + m.capsuleRadius) / (m.capsuleHalfHeight + m.capsuleRadius)
+      : 1;
+    this.root.scale.y = THREE.MathUtils.damp(this.root.scale.y, wantSquash, 14, dt);
   }
 
   /**
@@ -729,13 +1065,34 @@ export class PlayerController {
         } else if (impact > 5) {
           this.setState(STATE.LAND, { force: true });
           this.anim.play('land', { fadeFrames: 3 });
-        } else if (!COMMITTED.has(this.state)) {
+        } else if (!COMMITTED.has(this.state) && this.state !== STATE.CROUCH) {
+          // CROUCH is excluded deliberately. It is not a committed state — you
+          // can steer and stop out of it freely — but it owns a resized
+          // capsule, so anything that returns the machine to IDLE behind its
+          // back leaves the collider half-height with nothing tracking it.
           this.setState(STATE.IDLE);
         }
       }
     } else {
       if (this.coyoteFrames > 0) this.coyoteFrames--;
-      if (wasGrounded && !COMMITTED.has(this.state) && this.state !== STATE.AIRBORNE) {
+
+      // Crouch leaves the ground on its own terms.
+      //
+      // Shrinking the capsule lifts its bottom off the floor for a step or
+      // two before snap-to-ground catches up, so Rapier reports NOT grounded
+      // on the very frame you crouch. Letting the generic airborne transition
+      // see that cancels the crouch instantly and silently — it stood the
+      // player back up on the same frame they crouched, every time.
+      //
+      // Coyote time already exists to answer "has the player really left the
+      // ground, or is this a one-frame artefact", so it answers this too.
+      if (this.state === STATE.CROUCH) {
+        if (this.coyoteFrames <= 0) {
+          this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+          this.setState(STATE.AIRBORNE, { force: true });
+          this.anim.play('fall', { fadeFrames: 8 });
+        }
+      } else if (wasGrounded && !COMMITTED.has(this.state) && this.state !== STATE.AIRBORNE) {
         this.setState(STATE.AIRBORNE);
         this.anim.play('fall', { fadeFrames: 8 });
       }
@@ -761,10 +1118,25 @@ export class PlayerController {
       case STATE.DRINK:
         if (this.stateFrame >= TUNING.health.flaskDrinkFrames) this.setState(STATE.IDLE);
         return;
+      case STATE.STAGGER:
+        if (this.stateFrame >= TUNING.health.staggerFrames) this.setState(STATE.IDLE);
+        return;
+      case STATE.CROUCH: {
+        // Crouched locomotion still blends the walk tree, just slower and with
+        // the root dropped — no new clips, which is the right call in a
+        // blockout.
+        const speed = Math.hypot(this.velocity.x, this.velocity.z);
+        this.#blendLocomotion(speed);
+        return;
+      }
       case STATE.JUMP_START:
       case STATE.AIRBORNE:
       case STATE.STAND_UP:
       case STATE.CORPSE:
+      case STATE.ATTACK:
+      case STATE.CRITICAL:
+      case STATE.GUARD:
+      case STATE.DEFLECT:
       case STATE.DEAD:
         return;
     }
@@ -888,31 +1260,4 @@ export class PlayerController {
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
   }
-}
-
-/**
- * The held sword.
- *
- * Inert geometry parented to the hand bone. Combat is out this phase, but the
- * sword is beat 5 of the chapter and a beat that hands the player nothing they
- * can see is a beat they will not believe happened — so the pickup still puts
- * a visible blade in the hand, it just does not swing yet.
- */
-function buildHeldSword() {
-  const g = new THREE.Group();
-  const steel = toonMaterial({ color: 0xa8b0b8, bands: 4, rimStrength: 0.7, rimPower: 3.2 });
-  const wood = toonMaterial({ color: 0x6b5138, bands: 3, rimStrength: 0.36 });
-
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.98, 0.028), steel);
-  blade.position.y = 0.62;
-  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.055, 0.065), steel);
-  guard.position.y = 0.12;
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.24, 0.062), wood);
-  const pommel = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, 0.09), steel);
-  pommel.position.y = -0.15;
-
-  g.add(blade, guard, grip, pommel);
-  // Held down the forearm rather than straight up out of the fist.
-  g.rotation.set(-0.15, 0, 0.08);
-  return g;
 }

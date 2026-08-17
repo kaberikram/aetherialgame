@@ -58,6 +58,15 @@ export const TUNING = {
     // is one long decline. Applied against the ground normal the character
     // controller actually reports.
     slopeSpeedUphill: 0.72,
+    // Tap-to-roll / hold-to-sprint, the Elden Ring scheme. Below this many
+    // frames a DODGE press is a roll; at or past it, it is a sprint and no
+    // roll fires. Short on purpose — this is latency the roll pays, and every
+    // frame of it is felt.
+    sprintHoldFrames: 10, // ≈165ms
+    // Crouch. The capsule is genuinely resized rather than the mesh being
+    // scaled, so low passages are low for the physics too.
+    crouchHalfHeight: 0.26, // total ≈1.10m against 1.68m standing
+    crouchSpeedScale: 0.45,
   },
 
   /** Water changes the fight in the Star Chamber. Depth is the dial. */

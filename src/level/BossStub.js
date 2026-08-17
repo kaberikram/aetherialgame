@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { EVENTS } from '../core/EventBus.js';
 import { toonMaterial } from '../render/npr/ToonMaterial.js';
+import { Vitals } from '../combat/Vitals.js';
+import { StaticCapsule } from '../combat/HitboxSystem.js';
 
 /**
  * A stand-in for The Drowned.
@@ -12,11 +14,14 @@ import { toonMaterial } from '../render/npr/ToonMaterial.js';
  * question on the table is whether walking through the chapter feels good.
  *
  * So this is the smallest thing that keeps the chain intact: a mass in the
- * water you walk up to and press interact on, which emits `BOSS_DEFEATED`.
- * It occupies the boss's space at the boss's scale, so the arena still reads
- * at the right proportions, and it exposes the same `engage`/`reset`/`alive`
- * surface `BossEncounter` drives — the real controller drops back into the
- * same seam.
+ * water with a hurtbox and a health pool, which you kill with R1. It occupies
+ * the boss's space at the boss's scale, so the arena still reads at the right
+ * proportions, and it exposes the same `engage`/`reset`/`alive` surface
+ * `BossEncounter` drives — the real controller drops back into the same seam.
+ *
+ * It does not attack. It has no AI, no moves and no telegraphs, which is the
+ * entire difference between this and a boss. What it does have is the thing
+ * the chapter's flow needs: a way to die that the player caused.
  */
 export class BossStub {
   constructor(engine, { position, arena }) {
@@ -27,17 +32,32 @@ export class BossStub {
     this.scene = engine.resolve('renderer').scene;
 
     this.position = position.clone();
-    this.alive = true;
+    this.faction = 'enemy';
     this.engaged = false;
     this.state = 'idle';
-    /** Read by the lock-on camera when combat returns. */
+    /** Read by the lock-on camera. */
     this.lockHeight = 2.6;
     this.lockDistanceScale = 1.6;
+    /** A stub cannot be executed — there is no stagger to punish. */
+    this.criticalImmune = true;
+    this.hitPulse = 0;
+
+    this.vitals = new Vitals(this.bus, this, { maxHealth: 900, maxPoise: 120 });
+    // Wide and low, matching the hull: a capsule around a boat-shaped mass.
+    this.hurtbox = new StaticCapsule({ position: this.position, height: 3.0, radius: 1.9 });
 
     this.mesh = this.#build();
     this.mesh.position.copy(this.position);
     this.scene.add(this.mesh);
     this.mesh.visible = false; // surfaces when the gate is entered
+
+    engine.resolve('hitboxes').registerHurtbox(this, this.hurtbox);
+    engine.resolve('lockOn').register(this);
+    this.bus.on(EVENTS.HIT_LANDED, (e) => { if (e.victim === this) this.#onHit(e); });
+  }
+
+  get alive() {
+    return this.vitals.alive;
   }
 
   /**
@@ -70,19 +90,28 @@ export class BossStub {
     this.arena?.burst(this.position, 1.2);
     this.bus.emit(EVENTS.BOSS_ENCOUNTER_START, { id: 'drowned', name: 'The Drowned' });
     this.bus.emit(EVENTS.DIALOGUE_LINE, {
-      speaker: '', text: 'It is already awake. Walk up to it and end this.', duration: 4.2,
+      speaker: '', text: 'It does not move. Cut it until it stops being there.', duration: 4.2,
     });
   }
 
-  /** The stub's whole interaction: get close, and it is over. */
+  #onHit({ died }) {
+    // Rock away from the blow. A target that absorbs a hit without moving
+    // reads as a wall, and half of what makes a swing feel like it connected
+    // is the thing you hit acknowledging it.
+    this.hitPulse = 1;
+    if (died) this.#defeat();
+  }
+
   fixedUpdate(dt) {
-    if (!this.engaged || !this.alive) return;
-    if (this.player.position.distanceTo(this.position) > 3.2) return;
-    this.#defeat();
+    this.vitals.fixedUpdate(dt);
+    this.hurtbox.update();
+    if (this.hitPulse > 0) {
+      this.hitPulse = Math.max(0, this.hitPulse - dt * 3.2);
+      this.mesh.rotation.z = Math.sin(this.hitPulse * 22) * this.hitPulse * 0.07;
+    }
   }
 
   #defeat() {
-    this.alive = false;
     this.engaged = false;
     this.state = 'dead';
     this.mesh.visible = false;
@@ -91,9 +120,11 @@ export class BossStub {
   }
 
   reset() {
-    this.alive = true;
+    this.vitals.refill();
     this.engaged = false;
     this.state = 'idle';
+    this.hitPulse = 0;
+    this.mesh.rotation.z = 0;
     this.mesh.visible = false;
   }
 
