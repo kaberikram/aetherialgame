@@ -46,17 +46,31 @@ export function build(ctx) {
   // collider. The player *flies* up this shaft, so they are in contact with it
   // at arbitrary angles; boxing it into a polygon would put twelve invisible
   // corners in the way of the flight tutorial.
-  const shaft = new THREE.CylinderGeometry(30, 24, 58, 20, 1, true);
+  // ...and it needs a doorway, because the corridor from the Star Chamber
+  // arrives straight into it.
+  //
+  // This was a closed cylinder. Three's CylinderGeometry lays out its vertices
+  // as x = r·sin θ, z = r·cos θ, so θ=0 faces +z — which is exactly the
+  // direction the approach corridor comes from. At the corridor's height the
+  // shaft's interpolated radius is ~24.3m, putting its wall at z ≈ −101.7, and
+  // the corridor floor runs from z −96 to −125 straight through it. So the wall
+  // stood across the passage and the Pagoda Well — the chapter's last room, its
+  // flight tutorial and its only daylight — could not be reached on foot at all.
+  //
+  // The corridor is 9m wide, which subtends atan(4.5/24.3) ≈ 0.185 rad, so the
+  // arc starts just past that and stops just short of coming back. The cost is
+  // a full-height slot in a wall the player later flies up; the alternative is
+  // a room you cannot enter. Found by `tools/playthrough.mjs`.
+  const DOOR = 0.23;
+  const shaft = new THREE.CylinderGeometry(30, 24, 58, 20, 1, true, DOOR, Math.PI * 2 - DOOR * 2);
   shaft.scale(-1, 1, 1);
   shaft.computeVertexNormals();
-  const shaftMesh = new THREE.Mesh(shaft, m.pagodaShaft);
-  shaftMesh.position.set(w.x, w.y + 27, w.z);
-  shaftMesh.receiveShadow = true;
-  shaftMesh.castShadow = false;
-  shaftMesh.userData.noInk = true; // 20 vertical lines around a shaft is a cage
-  ctx.add(shaftMesh);
-  ctx.physics.addStaticGeometry(shaft, shaftMesh.matrixWorld.clone().setPosition(shaftMesh.position),
-    { group: FILTERS.world });
+  // `solid()`, not `add()` plus a separate collider call. This is one of the two
+  // genuinely curved walkable surfaces the chapter keeps a trimesh for, and
+  // saying so through the builder is what keeps the collision audit's
+  // `noCollide` bookkeeping true — `add()` marks its subtree as decoration.
+  const shaftMesh = ctx.solid(shaft, m.pagodaShaft, new THREE.Vector3(w.x, w.y + 27, w.z), { noInk: true });
+  shaftMesh.castShadow = false; // 20 vertical lines around a shaft is a cage
 
   // Floor.
   ctx.box(new THREE.Vector3(64, 1, 64), new THREE.Vector3(w.x, w.y - 0.5, w.z), m.pagodaStone);
@@ -94,10 +108,29 @@ function buildTower(ctx, w) {
 
   // Plinth and its entrance steps.
   ctx.box(new THREE.Vector3(BASE_WIDTH + 4, 1.5, BASE_WIDTH + 4), new THREE.Vector3(w.x, w.y + 0.75, w.z), m.pagodaStone);
-  for (let i = 0; i < 3; i++) {
+  // Entrance steps, from the corridor up onto the plinth.
+  //
+  // Two things were wrong here and they compounded. The risers were 0.5m
+  // against a 0.42m step offset (TUNING.movement), so the capsule bounced off
+  // the temple stairs. And they were laid out as a climb of the plinth's full
+  // 1.5m — measured from the well floor — when the surface the player actually
+  // arrives on is the approach corridor's floor at y −24.26, which is only
+  // 0.76m below the plinth top. So the top step was buried inside the plinth
+  // and the bottom two were under the corridor, leaving the plinth's +z face
+  // standing as a 1.04m ledge across the full width of the corridor: the
+  // player walked down the passage and stopped dead at z −116.4.
+  //
+  // Three risers over 0.76m is 0.253m each, comfortably inside the offset. The
+  // third riser *is* the plinth, so only two boxes are needed, and they step
+  // outward from the plinth's face rather than inward from the corridor.
+  const PLINTH_TOP = w.y + 1.5;
+  const PLINTH_FACE = w.z + (BASE_WIDTH + 4) / 2;
+  const CORRIDOR_Y = -24.26;
+  const rise = (PLINTH_TOP - CORRIDOR_Y) / 3;
+  for (let i = 0; i < 2; i++) {
     ctx.box(
       new THREE.Vector3(6, 0.5, 1.4),
-      new THREE.Vector3(w.x, w.y + 0.25 + i * 0.5, w.z + 11.4 - i * 1.4),
+      new THREE.Vector3(w.x, PLINTH_TOP - rise * (i + 1) - 0.25, PLINTH_FACE + 0.7 + i * 1.4),
       m.pagodaStone
     );
   }

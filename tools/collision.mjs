@@ -119,6 +119,16 @@ const WALKABLE_NORMAL_Y = Math.cos((52 * Math.PI) / 180);
 const STAND_HEIGHT = (0.52 + 0.32) * 2;  // ≈1.68m
 const CROUCH_HEIGHT = (0.26 + 0.32) * 2; // ≈1.16m
 
+/**
+ * The real climb limit, from `TUNING.movement.stepOffset`.
+ *
+ * This check used 0.55m, which is looser than the controller and so passed
+ * things the player cannot climb — the Pagoda Well's temple steps rose 0.50m
+ * each and sailed through it while being physically unclimbable. Asserted
+ * against the live value below, like the capsule heights.
+ */
+const STEP_OFFSET = 0.42;
+
 const free = () => { try { execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`, { stdio: 'ignore' }); } catch {} };
 
 async function startServer() {
@@ -161,12 +171,14 @@ async function main() {
         stand: (m.capsuleHalfHeight + m.capsuleRadius) * 2,
         crouch: (m.crouchHalfHeight + m.capsuleRadius) * 2,
         slopeCos: Math.cos((m.maxSlopeDegrees * Math.PI) / 180),
+        stepOffset: m.stepOffset,
       };
     });
     for (const [name, mine, theirs] of [
       ['stand height', STAND_HEIGHT, live.stand],
       ['crouch height', CROUCH_HEIGHT, live.crouch],
       ['slope limit', WALKABLE_NORMAL_Y, live.slopeCos],
+      ['step offset', STEP_OFFSET, live.stepOffset],
     ]) {
       if (Math.abs(mine - theirs) > 1e-6) {
         throw new Error(
@@ -176,7 +188,7 @@ async function main() {
     }
 
     // ---- 1 & 2: ground presence and continuity -------------------------
-    const ground = await page.evaluate((segments) => {
+    const ground = await page.evaluate(({ segments, STEP_OFFSET }) => {
       const api = window.__VESSEL_API;
       const ph = api.engine.resolve('physics');
       const DOWN = { x: 0, y: -1, z: 0 };
@@ -220,7 +232,7 @@ async function main() {
           samples.push({ zone: seg.zone, x: +cx.toFixed(1), z: +cz.toFixed(1), y: centre });
           if (seg.continuous !== false && prev !== null && centre !== null) {
             const rise = centre - prev;
-            if (rise > 0.55) {
+            if (rise > STEP_OFFSET) {
               steps.push({ zone: seg.zone, x: +cx.toFixed(1), z: +cz.toFixed(1), rise: +rise.toFixed(2) });
             }
           }
@@ -228,7 +240,7 @@ async function main() {
         }
       }
       return { holes, steps, sampleCount: samples.length };
-    }, PATH_SEGMENTS);
+    }, { segments: PATH_SEGMENTS, STEP_OFFSET });
 
     console.log('\n──── 1. ground under the critical path ────');
     console.log(`  ${ground.sampleCount} samples`);
@@ -243,7 +255,7 @@ async function main() {
     console.log('\n──── 2. continuity (steps the capsule cannot climb) ────');
     if (ground.steps.length) {
       exitCode = 1;
-      console.log(`  ✗ ${ground.steps.length} step(s) above the 0.55m step offset:`);
+      console.log(`  ✗ ${ground.steps.length} step(s) above the ${STEP_OFFSET}m step offset:`);
       for (const s of ground.steps.slice(0, 12)) {
         console.log(`      ${s.zone.padEnd(12)} x=${s.x} z=${s.z}  rise ${s.rise}m`);
       }

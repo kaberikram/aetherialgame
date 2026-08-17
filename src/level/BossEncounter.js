@@ -73,6 +73,8 @@ export class BossEncounter {
     setTimeout(() => {
       this.boss.reset();
       this.gate.reset();
+      // The fight is on again, so the room closes again.
+      this.arena.setContained(true);
     }, 1600);
   }
 
@@ -80,6 +82,11 @@ export class BossEncounter {
     this.active = false;
     this.#releaseCamera();
     this.gate.dissolve();
+    // Open the room. The containment ring has one doorway, on the approach
+    // side, so leaving it up would seal the player into the arena with the
+    // Pagoda Well on the far side of it — the chapter would end here. A Souls
+    // arena opens when the boss dies; so does this one.
+    this.arena.setContained(false);
     this.engine.resolve('state').addCurrency(1200);
     this.engine.resolve('state').setFlag('bossDefeated');
     // A pause before the wings. The player has just won and needs a beat to
@@ -140,6 +147,7 @@ export class BossEncounter {
     this.boss.vitals.applyDamage(99999, 0, 'debug');
     this.boss.state = 'dead';
     this.boss.mesh.visible = false;
+    this.arena.setContained(false);
     this.#beginWingChoice();
   }
 

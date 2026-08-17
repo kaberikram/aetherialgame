@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "VESSEL — Chapter 1. A third-person souls-like in Three.js rooted in Southeast Asian mythology.",
+  "description": "VESSEL \u2014 Chapter 1. A third-person souls-like in Three.js rooted in Southeast Asian mythology.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,7 +12,8 @@
     "rubric": "node tools/rubric.mjs",
     "perf": "node tools/perf.mjs",
     "controls": "node tools/controls.mjs",
-    "collision": "node tools/collision.mjs"
+    "collision": "node tools/collision.mjs",
+    "playthrough": "node tools/playthrough.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",

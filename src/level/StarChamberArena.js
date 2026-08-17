@@ -53,6 +53,9 @@ export class StarChamberArena {
 
     /** Set true while the player is in the chamber; gates the per-frame work. */
     this.active = false;
+    /** Fight-time containment ring; see setContained(). */
+    this.containment = [];
+    this.contained = false;
   }
 
   /**
@@ -113,31 +116,99 @@ export class StarChamberArena {
     this.physics.addStaticGeometry(floor, floorMesh.matrix.clone().setPosition(this.center), { group: FILTERS.world });
 
     // --- the stepped ritual dais rim ---------------------------------------
+    //
     // Three concentric steps, matching the concept board's stepped platform.
-    for (let i = 0; i < 3; i++) {
-      const r = this.radius + 0.5 + i * 1.15;
-      const h = 0.34 + i * 0.30;
-      const ring = new THREE.Mesh(new THREE.CylinderGeometry(r, r + 0.5, h, 28, 1, true), m.chamberStep);
-      ring.position.copy(this.center).setY(this.center.y + h / 2 - 0.05 + i * 0.30);
-      ring.receiveShadow = true;
-      ring.castShadow = true;
-      ring.userData.noInk = true;
-      this.group.add(ring);
+    //
+    // ## The pit that was here
+    //
+    // These were three open-ended `CylinderGeometry` tubes with no colliders:
+    // risers with no treads, drawn and not solid. The basin is a disc of radius
+    // `this.radius` and the containment ring stands at `radius + 3.4`, so the
+    // annulus between them had no floor in it at all — 21 of 24 directions
+    // sampled around the arena came back with nothing under them. You could walk
+    // off the edge of the boss arena, through the dais you can plainly see, and
+    // fall out of the chapter. `tools/playthrough.mjs` found it by doing exactly
+    // that: the bot drifted out on attack root motion and the run ended at
+    // y −1020.
+    //
+    // ## Why the steps are boxes and the mesh is built from them
+    //
+    // The first fix drew each tread as a flat `RingGeometry` annulus over a ring
+    // of box colliders. That leaves the collider and the visual as two different
+    // shapes — a chord approximating an arc, against a true arc — and they
+    // cannot agree at a band boundary no matter how the chords are sized,
+    // because a chord's inner edge bows away from the centre between its ends.
+    // The collision audit found the seam, and widening the boxes to cover the
+    // sagitta simply moved it.
+    //
+    // So the dais follows the rule `ZoneBuilder` states for the rest of the
+    // chapter: one transform produces both. Each step is a ring of boxes, every
+    // box is registered as a collider AND appended to one merged buffer, and the
+    // mesh is therefore the exact union of the colliders. Ninety-six boxes, one
+    // draw call, and nothing left to diverge.
+    const STEPS = 3;
+    const ARC = 32;
+    const daisPos = [];
+    const daisNrm = [];
+    const _m4 = new THREE.Matrix4();
+    const _nm3 = new THREE.Matrix3();
+    const _one = new THREE.Vector3(1, 1, 1);
+    const _t = new THREE.Vector3();
+
+    // `at`, not `pos` — `pos` is the basin's position attribute above.
+    const addStepBox = (size, at, quat) => {
+      this.physics.addStaticBox(size, at, quat, { group: FILTERS.world });
+      const g = new THREE.BoxGeometry(size.x, size.y, size.z).toNonIndexed();
+      _m4.compose(at, quat, _one);
+      _nm3.getNormalMatrix(_m4);
+      const pa = g.getAttribute('position');
+      const na = g.getAttribute('normal');
+      for (let i = 0; i < pa.count; i++) {
+        _t.fromBufferAttribute(pa, i).applyMatrix4(_m4);
+        daisPos.push(_t.x, _t.y, _t.z);
+        _t.fromBufferAttribute(na, i).applyNormalMatrix(_nm3).normalize();
+        daisNrm.push(_t.x, _t.y, _t.z);
+      }
+      g.dispose();
+    };
+
+    for (let i = 0; i < STEPS; i++) {
+      // Bands overlap by 0.5m so no boundary is a butt joint. The innermost
+      // starts at `radius` rather than beyond it, so it meets the basin instead
+      // of leaving a slot at the waterline.
+      const inner = this.radius + i * 1.15;
+      const outer = inner + 1.65;
+      const top = this.center.y + (0.34 + i * 0.30) - 0.05 + i * 0.30;
+      const rm = (inner + outer) * 0.5;
+      // 1.12 overlap tangentially, or the ring leaks between segments.
+      const arcLen = ((Math.PI * 2 * rm) / ARC) * 1.12;
+      for (let k = 0; k < ARC; k++) {
+        const a = (k / ARC) * Math.PI * 2;
+        addStepBox(
+          new THREE.Vector3(arcLen, 0.9, outer - inner),
+          new THREE.Vector3(
+            this.center.x + Math.cos(a) * rm,
+            top - 0.45,
+            this.center.z + Math.sin(a) * rm
+          ),
+          // A Y-rotation of −(π/2 + a) puts the box's local +X along the tangent
+          // and its +Z along the radius, so `size` reads (along the ring, up,
+          // across the ring) — check it at a=0, where local +X must land on +Z:
+          // cos(−π/2)=0, −sin(−π/2)=1. ✓
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -(Math.PI / 2 + a), 0))
+        );
+      }
     }
 
-    // Invisible containment. Explicitly NOT a camera blocker: the camera has
-    // to be able to sit outside the ring while framing a fight inside it.
-    const wallCount = 40;
-    for (let i = 0; i < wallCount; i++) {
-      const a = (i / wallCount) * Math.PI * 2;
-      const r = this.radius + 3.4;
-      this.physics.addStaticBox(
-        new THREE.Vector3(3.2, 8, 1.0),
-        new THREE.Vector3(this.center.x + Math.cos(a) * r, this.center.y + 4, this.center.z + Math.sin(a) * r),
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0)),
-        { group: FILTERS.containment }
-      );
-    }
+    const daisGeo = new THREE.BufferGeometry();
+    daisGeo.setAttribute('position', new THREE.Float32BufferAttribute(daisPos, 3));
+    daisGeo.setAttribute('normal', new THREE.Float32BufferAttribute(daisNrm, 3));
+    const dais = new THREE.Mesh(daisGeo, m.chamberStep);
+    dais.receiveShadow = true;
+    dais.castShadow = true;
+    // No ink: 96 boxes of EdgesGeometry around a ring reads as a wire cage.
+    dais.userData.noInk = true;
+    this.group.add(dais);
 
     // --- votive stupas ringing the dais ------------------------------------
     // Corner markers. Stacked boxes rather than a merged profile — the read is
@@ -158,13 +229,16 @@ export class StarChamberArena {
       }
     }
 
+    this.setContained(true);
+
+
     this.#buildWater();
     this.#buildStar();
 
     // Say which of these surfaces are decoration.
     //
-    // The basin is the only mesh in the arena with a collider under it — the
-    // dais rings, the stupas, the water plane and the star are drawn and never
+    // The basin and the dais are the meshes in the arena with colliders under
+    // them — the stupas, the water plane and the star are drawn and never
     // collided with, and the containment ring is the reverse, colliders with no
     // meshes at all. `ZoneBuilder` marks this for everything it builds, but the
     // arena is assembled straight onto the scene, so it has to say so itself.
@@ -173,9 +247,80 @@ export class StarChamberArena {
     // water surface floating 6cm above it and reports the whole pool as drift.
     this.group.traverse((o) => { o.userData.noCollide = true; });
     this.floorMesh = floorMesh;
-    floorMesh.userData.noCollide = false;
+    this.walkable = [floorMesh, dais];
+    for (const o of this.walkable) o.userData.noCollide = false;
 
     return this;
+  }
+
+  /**
+   * The ring that keeps the fight in the room — and lets the player leave it.
+   *
+   * ## Two bugs lived here
+   *
+   * **The axes were swapped.** `size` was `(3.2, 8, 1.0)`, read as "3.2 along
+   * the ring, 1.0 through it". It is not: a Y-rotation of −a sends local +X to
+   * (cos a, 0, sin a) — the RADIAL direction, the one `position` is built from —
+   * and local +Z to the tangent. So this was forty spokes 3.2m deep and 1m wide
+   * rather than forty wall panels, and it failed both ways at once. It did not
+   * contain: arc spacing here is 2π·18.4/40 = 2.89m, so 1m panels left 1.9m
+   * gaps and the player could walk out between them and off the edge of the
+   * chapter. And it blocked the way IN: the spoke at a = π/2 reached from
+   * z −61.2 to −58.0 across x ≈ 0, exactly where the approach steps arrive,
+   * which with the capsule's 0.32m radius is a hard stop at z −57.68. An
+   * invisible wall on the critical path, in front of the fog gate, with the
+   * boss engaged on the far side of it.
+   *
+   * **It was permanent.** Closing the circle correctly only replaced one wall
+   * with a better-built one, because the fog gate stands at `radius + 2.6` —
+   * INSIDE this ring — so the approach has to cross it, and after the fight the
+   * player has to cross back to reach the Pagoda Well. The leak was doing that
+   * job by accident. So the ring is a *fight* fixture: it goes up with the
+   * room and comes down when the boss dies, which is what a Souls arena does
+   * anyway. The doorway on the +z side covers the approach, and the gate's own
+   * barrier fills it from the moment the room is entered until the boss is dead.
+   *
+   * Both found by `tools/playthrough.mjs`, which walked into the first from six
+   * start points and stopped at −57.7 every time, then got sealed in by the
+   * second.
+   */
+  setContained(on) {
+    if (on === this.contained) return;
+    this.contained = on;
+    if (!on) {
+      for (const body of this.containment ?? []) this.physics.removeBody(body);
+      this.containment = [];
+      return;
+    }
+
+    const COUNT = 40;
+    const r = this.radius + 3.4;
+    const step = (Math.PI * 2) / COUNT;
+    // A little over the arc spacing, so neighbours overlap instead of meeting.
+    const panel = r * step * 1.15;
+    // The approach bears +z from the centre; the doorway is one panel either
+    // side of it, which is ~5.8m of gap against the gate's 5.0m width.
+    const door = Math.atan2(1, 0);
+    this.containment = [];
+    for (let i = 0; i < COUNT; i++) {
+      const a = i * step;
+      let d = Math.abs(a - door);
+      if (d > Math.PI) d = Math.PI * 2 - d;
+      if (d < step * 1.5) continue;
+      const { body } = this.physics.addStaticBox(
+        new THREE.Vector3(1.0, 8, panel),
+        new THREE.Vector3(
+          this.center.x + Math.cos(a) * r,
+          this.center.y + 4,
+          this.center.z + Math.sin(a) * r
+        ),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0)),
+        // Explicitly NOT a camera blocker: the camera has to be able to sit
+        // outside the ring while framing a fight inside it.
+        { group: FILTERS.containment }
+      );
+      this.containment.push(body);
+    }
   }
 
   /**

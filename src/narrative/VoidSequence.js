@@ -146,9 +146,24 @@ export class VoidSequence {
     return this;
   }
 
+  /**
+   * The world comes back, which is beat 2 by definition: the light is in the
+   * body and the body is somewhere.
+   *
+   * Beat 2 had no emitter anywhere in the codebase. `BEAT.EMBODIMENT` was in
+   * the enum, in `BEAT_NAME`, and in the pigeon's bark table, and nothing ever
+   * fired it — so the chapter announced seven of its eight beats and the one it
+   * skipped was the one the whole opening is named after. Found by
+   * `tools/playthrough.mjs`, which is the first thing to ever check.
+   *
+   * It goes here rather than in `#updateEntering` because `skip()` restores the
+   * world too, and both paths have to fire it exactly once — the same
+   * constraint the note on beat 3 in `#updateStanding` records.
+   */
   #restoreWorld() {
     this.cameraRig.collisionEnabled = true;
     if (this.worldGroup) this.worldGroup.visible = this.worldWasVisible ?? true;
+    this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.EMBODIMENT });
   }
 
   /** The body, dropped. Lit only by the player, because nothing else is here. */
