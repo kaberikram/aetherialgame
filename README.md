@@ -65,8 +65,9 @@ F11 grayscale · `[` `]` time scale · 1–5 warp to zone · 8 wing choice ·
 
 ```bash
 npm run smoke        # headless boot, zero console errors, perf counters
-npm run controls     # 8 strafe/look assertions at 4 camera yaws
-npm run collision    # ground / continuity / spawn / height-function audit
+npm run controls     # strafe/look, tap-vs-hold dodge, crouch, the crawl
+npm run collision    # ground, continuity, spawns, grid sweep, wedges
+npm run playthrough  # plays the chapter void → oculus, checks all 8 beats
 node tools/perf.mjs  # scene passes, draw calls, triangles, pixels per frame
 node tools/probe.mjs --skipIntro --keys "Digit3:80" "api.player.state"
 ```

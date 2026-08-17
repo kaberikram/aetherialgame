@@ -118,21 +118,70 @@ function buildTunnel(ctx, WAYPOINTS) {
     8, 1.0, m.descentFloor
   );
 
+  // Walls down the lower route.
+  //
+  // `buildShell` walls the descent, but it follows the MAIN spine, and the lower
+  // route diverges from that spine by up to 5m — so the route you end up on by
+  // missing the jump was a ledge in open air with nothing at its edges. Walking
+  // into the crawl below scrubs a standing player sideways along the slab, and
+  // the scrub slid them straight off that edge and out of the chapter: y −13.8 to
+  // −166 and still falling. Found by `tools/controls.mjs`.
+  //
+  // Inner faces sit at ±3.9 against the route's half-width of 4, so the player
+  // meets a wall a little before the drop rather than at it.
+  const lowerSpine = [
+    new THREE.Vector3(-3.0, -9.4, 17.6),
+    new THREE.Vector3(-1.5, -11.4, 14.4),
+    new THREE.Vector3(2.0, -14.0, 5.0),
+  ];
+  for (let i = 0; i < lowerSpine.length - 1; i++) {
+    const p0 = lowerSpine[i];
+    const p1 = lowerSpine[i + 1];
+    const mid = p0.clone().lerp(p1, 0.5);
+    const dx = p1.x - p0.x;
+    const dz = p1.z - p0.z;
+    const len = Math.hypot(dx, dz);
+    // Euler(0, yaw, 0) with yaw = atan2(dx, dz) sends local +Z along the
+    // segment, so `size` reads (thickness, height, length).
+    const yaw = Math.atan2(dx, dz);
+    const px = dz / len;
+    const pz = -dx / len;
+    for (const side of [-1, 1]) {
+      ctx.box(
+        new THREE.Vector3(1.0, 4, len + 1.0),
+        new THREE.Vector3(mid.x + px * side * 4.4, mid.y + 1.4, mid.z + pz * side * 4.4),
+        m.descentWall,
+        { rotation: new THREE.Euler(0, yaw, 0), castShadow: false }
+      );
+    }
+  }
+
   // The crawl.
   //
   // Crouch needs somewhere to crouch or it is a button that changes nothing,
   // and this is the honest place for it: the lower route is where you end up
   // having *missed* the jump, so the chapter teaches the verb at the moment it
-  // is already telling you that you got something wrong. Roughly 1.25m of
-  // clearance against a 1.68m standing capsule and a 1.16m crouched one — you
-  // cannot walk it and you cannot fail to notice why.
+  // is already telling you that you got something wrong.
+  //
+  // 1.45m of clearance, against a 1.68m standing capsule and a 1.16m crouched
+  // one. The first draft used 1.25m, which is arithmetically enough — 9cm of
+  // margin — and it did not work: the character controller carries a 0.02m skin
+  // offset at each end, snap-to-ground pulls the capsule down into the floor,
+  // and autostep tries to lift it over what it is brushing. `tools/controls.mjs`
+  // caught it, crouched and blocked. 1.45m leaves ~0.25m either way, which also
+  // stops the crawl feeling like it is scraping — a ceiling you have to be
+  // pixel-perfect under reads as a bug even when it is passable.
   //
   // The slab hangs BELOW the line passed to `ramp`, so the line sits at the
   // clearance plus the thickness.
   ctx.ramp(
-    new THREE.Vector3(-0.98, -11.79 + 1.25 + 1.0, 13.0),
-    new THREE.Vector3(0.51, -12.89 + 1.25 + 1.0, 9.0),
-    7, 1.0, m.shell,
+    new THREE.Vector3(-0.98, -11.79 + 1.45 + 1.0, 13.0),
+    new THREE.Vector3(0.51, -12.89 + 1.45 + 1.0, 9.0),
+    // Width 9 against the lower route's 8: the slab has to overhang the floor it
+    // roofs. At width 7 it left 0.5m of open floor down each side, and a
+    // standing capsule (0.64m across) scraped along the edge and walked the
+    // whole crawl upright — `tools/controls.mjs` caught it doing 37m.
+    9, 1.0, m.shell,
     { castShadow: false }
   );
 

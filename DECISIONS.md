@@ -474,3 +474,135 @@ draws what Rapier actually has, including the player capsule, the containment
 ring, and anything registered by code that forgot to tell a debug list. A debug
 view that can drift from the thing it debugs is worse than none, because it is
 confidently wrong.
+
+### D62. The audit that never looked at a floor
+The grid sweep added to prove the level reported 307 collider-vs-mesh
+mismatches. All 307 were the harness, and the reason took four separate bugs to
+reach — the last of which meant the sweep had never once measured a floor.
+
+Its descent-through-hits loop used Rapier's default `solid: true`. A ray whose
+origin is inside a shape reports a hit at distance 0, so on ducking 5cm under a
+ceiling's top face the probe was still inside the 1.2m slab, got distance 0
+back, ducked another 5cm, and burned every attempt marching down through the
+roof it started on. Every "surface sample" it ever reported was a ceiling.
+`solid: false` reports the exit face, so one step leaves the slab.
+
+Three others were hiding behind it:
+
+- **`THREE.Intersection.normal` is object-local.** three does not transform it in
+  `Mesh.raycast`. Every `ramp()` is rotated, and a box's local +Y reads (0,1,0)
+  whichever way it actually points, so the mesh-side walkable filter accepted
+  walls. Needs the normal matrix.
+- **Non-colliding decoration was read as "the visual".** The Green Vein water
+  planes sit 11cm over the floor *by design*; the harness called that authored
+  lift collider drift. `ZoneBuilder` now sets `userData.noCollide` at the one
+  place that knows whether a collider was registered, and `StarChamberArena` and
+  `Checkpoint` — which build straight onto the scene — say so for themselves.
+- **Probing from above the ceiling to find the floor is backwards.** Zones now
+  declare the y band their floor occupies. That is check 1's own trick ("probe
+  from just above the EXPECTED floor, not from high above") generalised from a
+  centreline to a grid.
+
+The check the sweep settled on is **standability**: an upward-facing face with
+room for a body above it. Collider-vs-mesh agreement is *structural* under
+`ZoneBuilder` — `box()` and `ramp()` register the collider from the same size,
+position and quaternion as the mesh — so the subtraction is kept as the tripwire
+for a hand-placed collider or a returning trimesh, not as the point.
+
+Two findings were real and neither was level geometry: the arena basin (the one
+remaining trimesh, and so the only surface where collider and mesh genuinely
+*can* drift) was excluded from the comparison, and the training dummies wrap a
+0.74m box collider around a 0.72m capsule visual — no box agrees with a dome, so
+they are excluded as combat props rather than chapter.
+
+### D63. Check 2 was looser than the controller
+Continuity compared rises against 0.55m while `TUNING.movement.stepOffset` is
+0.42. So it passed geometry the player cannot climb, and it did: the Pagoda
+Well's temple steps rose 0.50m each and sailed through while being physically
+unclimbable. The audit now reads the live tuning values — step offset, both
+capsule heights, the slope limit — and fails loudly if its own constants drift
+from the game's.
+
+The general lesson is that a harness with its own copy of a gameplay constant is
+a harness that will eventually certify a bug. Copies are fine; unasserted copies
+are not.
+
+### D64. A test that plays the game
+`tools/playthrough.mjs` drives the real controller through the real level with
+the real physics, void to oculus, and asserts all eight beats fire exactly once,
+the player never leaves the world, position keeps advancing, and the console
+stays clean.
+
+Nothing else in `tools/` plays the game, and it turned out that nothing else
+could have found what it found:
+
+1. **Beat 2 had no emitter at all.** `BEAT.EMBODIMENT` was in the enum, in
+   `BEAT_NAME` and in the pigeon's bark table, and nothing anywhere fired it.
+2. **The fog gate re-sealed with the player still outside it**, on a 900ms
+   wall-clock timer, under a comment describing a push that did not exist.
+3. **The Star Chamber's dais was drawn and not solid** — an open pit between the
+   basin and the containment ring.
+4. **The containment ring had its box axes swapped**, which made it forty radial
+   spokes instead of a wall: it leaked in every direction and simultaneously
+   stood across the only way in.
+5. **The well shaft was a closed cylinder** with the exit corridor running
+   straight into it, so the chapter's last room was unreachable.
+6. **The candi's steps** were both too tall and measured from the wrong datum.
+
+Steering writes `input.move` directly with `input.enabled = false`, the pattern
+`collision.mjs`'s wedge check arrived at, because a keyboard bot has to solve
+"which way is the camera facing" every frame and reports its own failures as
+level bugs. The simulation is pumped with `stepOnce()` rather than waited on —
+this container has no GPU, so wall-clock and simulation time diverge by more
+than an order of magnitude.
+
+**One segment cannot be pumped.** `Engine.stepOnce()` runs `#fixedStep` and
+nothing else, and `FogGate` does its proximity-and-interact check in `update(dt)`
+— the variable-rate stage — so under a pumped simulation the gate is never asked
+whether the player is standing in front of it. That segment drives an in-page rAF
+loop with the engine unpaused instead. Worth recording as a smell: an
+interaction that only exists on the render tick is an interaction whose timing
+depends on frame rate.
+
+### D65. The rule that keeps colliders honest, applied to the dais
+The Star Chamber dais was first fixed by drawing each tread as a flat
+`RingGeometry` annulus over a ring of box colliders. That leaves collider and
+visual as two different shapes — a chord approximating an arc against a true arc
+— and they cannot agree at a band boundary however the chords are sized, because
+a chord's inner edge bows away from the centre between its ends. The audit found
+the seam; covering the sagitta moved it.
+
+So the dais follows the rule `ZoneBuilder` states for the rest of the chapter:
+**one transform produces both.** Every box is registered as a collider and
+appended to one merged buffer, so the mesh is the exact union of the colliders.
+Ninety-six boxes, one draw call, nothing left to diverge.
+
+The containment ring is now also a *fight* fixture rather than permanent
+scenery. Closing its circle correctly would have sealed the player into the
+arena with the Pagoda Well on the far side — the leak had been doing that job by
+accident. It goes up with the room and comes down when the boss dies, which is
+what a Souls arena does anyway.
+
+### D66. Crouch needed somewhere to crouch, and the somewhere needed walls
+The crawl on the Descent's lower route exists so crouch is not a button that
+changes nothing. Getting it to work took three corrections, and the third was
+the serious one:
+
+- **1.25m of clearance is not enough** even though the arithmetic says it is
+  (1.16m crouched capsule, 9cm spare). The character controller carries a 0.02m
+  skin offset at each end, snap-to-ground pulls the capsule into the floor, and
+  autostep tries to lift it over what it is brushing. 1.45m leaves ~0.25m either
+  way — and a ceiling you have to be pixel-perfect under reads as a bug even
+  when it is passable.
+- **The slab has to overhang the floor it roofs.** At width 7 over a route of
+  width 8 it left 0.5m of open floor down each side, and a standing capsule
+  scraped along the edge and walked the whole crawl upright.
+- **And then the overhang became a trap.** Walking into the slab scrubs a
+  standing player sideways along it, and the lower route had no side walls —
+  `buildShell` follows the *main* spine, which the lower route diverges from by
+  up to 5m. The scrub slid the player off the edge and out of the chapter: y
+  −13.8 to −166 and still falling. The route has walls now.
+
+The wider point is that the wall scrub is a *mechanism for moving the player
+somewhere they did not ask to go*, so every surface it can push them along needs
+something at the far end of the push.
