@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 import { EVENTS } from '../core/EventBus.js';
 import { Vitals } from './Vitals.js';
 import { StaticCapsule } from './HitboxSystem.js';
@@ -41,7 +42,7 @@ export class TrainingDummy {
 
     const body = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.36, 1.02, 6, 12),
-      new THREE.MeshStandardMaterial({ color: 0x8a6a58, roughness: 0.88 })
+      toonMaterial({ color: 0x8a6a58, bands: 3, rimStrength: 0.5 })
     );
     body.position.y = 0.9;
     body.castShadow = true;
@@ -56,7 +57,7 @@ export class TrainingDummy {
 
     const post = new THREE.Mesh(
       new THREE.CylinderGeometry(0.10, 0.13, 0.42, 8),
-      new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 0.95 })
+      toonMaterial({ color: 0x4a4038, bands: 3, rimStrength: 0.35 })
     );
     post.position.y = 0.21;
     post.castShadow = true;

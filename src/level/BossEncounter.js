@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { EVENTS } from '../core/EventBus.js';
 import { StarChamberArena } from './StarChamberArena.js';
 import { FogGate } from './FogGate.js';
-import { BossController } from '../ai/BossController.js';
+import { BossStub } from './BossStub.js';
 import { WingChoice } from '../narrative/WingChoice.js';
+import { BEAT } from '../narrative/Beats.js';
 
 /**
  * BossEncounter — ties the arena, the gate, the boss and the retry loop
@@ -24,13 +25,15 @@ export class BossEncounter {
 
     this.arena = new StarChamberArena(engine, { center, radius }).build();
 
-    this.boss = new BossController(engine, {
+    // A stub while combat is out — see BossStub for why the link stays in the
+    // chain rather than being cut out of it.
+    this.boss = new BossStub(engine, {
       // Seated slightly below the surface line: it is a thing that lives in
-      // the pool, and legs ending exactly at the water plane read as hovering.
+      // the pool, and a body ending exactly at the water plane reads as
+      // hovering.
       position: center.clone().setY(center.y - 0.34),
       arena: this.arena,
     });
-    this.boss.register(engine.resolve('hitboxes'), engine.resolve('lockOn'));
 
     this.gate = new FogGate(engine, {
       position: center.clone().add(new THREE.Vector3(0, 0, radius + 2.6)),
@@ -48,6 +51,7 @@ export class BossEncounter {
 
   #startFight() {
     this.active = true;
+    this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.BOSS });
     this.boss.engage();
     // Confine the camera to the arena for the duration. The dais rim is
     // stonework the camera must not end up behind.
@@ -69,6 +73,8 @@ export class BossEncounter {
     setTimeout(() => {
       this.boss.reset();
       this.gate.reset();
+      // The fight is on again, so the room closes again.
+      this.arena.setContained(true);
     }, 1600);
   }
 
@@ -76,6 +82,11 @@ export class BossEncounter {
     this.active = false;
     this.#releaseCamera();
     this.gate.dissolve();
+    // Open the room. The containment ring has one doorway, on the approach
+    // side, so leaving it up would seal the player into the arena with the
+    // Pagoda Well on the far side of it — the chapter would end here. A Souls
+    // arena opens when the boss dies; so does this one.
+    this.arena.setContained(false);
     this.engine.resolve('state').addCurrency(1200);
     this.engine.resolve('state').setFlag('bossDefeated');
     // A pause before the wings. The player has just won and needs a beat to
@@ -91,9 +102,14 @@ export class BossEncounter {
       player: this.player,
       alignment: this.player.alignment,
     });
+    this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.WINGS });
     this.wingChoice.onResolved = (variant) => {
       this.player.flight?.unlock();
       this.engine.resolve('state').setFlag('wingsResolved');
+      // Beat 8. `onWingsResolved` was assigned by nothing, so the chapter had
+      // no ending beat at all — the exit fired only in the sense that the
+      // player could now fly out of a hole.
+      this.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.EXIT });
       this.onWingsResolved?.(variant);
     };
     this.wingChoice.begin();
@@ -117,12 +133,21 @@ export class BossEncounter {
     this.gate.update(dt);
   }
 
+  /** ZoneManager tells the arena when it is on screen; see StarChamberArena. */
+  setArenaActive(on) {
+    this.arena.active = on;
+  }
+
   /** Debug: skip straight to the wing choice. */
   forceWingChoice() {
     this.player.respawn(this.center.clone().setY(this.center.y + 0.4), Math.PI);
-    this.boss.alive = false;
+    // `alive` reads from vitals now, so kill it the way a sword would rather
+    // than assigning the flag — otherwise the debug path and the real path
+    // leave the boss in two different states.
+    this.boss.vitals.applyDamage(99999, 0, 'debug');
     this.boss.state = 'dead';
     this.boss.mesh.visible = false;
+    this.arena.setContained(false);
     this.#beginWingChoice();
   }
 

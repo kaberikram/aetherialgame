@@ -3,6 +3,8 @@ import { EVENTS } from '../core/EventBus.js';
 import { ACTION } from '../input/Actions.js';
 import { FILTERS } from '../physics/PhysicsWorld.js';
 
+const _v = new THREE.Vector3();
+
 /**
  * The fog gate.
  *
@@ -99,6 +101,11 @@ export class FogGate {
 
   update(dt) {
     this.material.uniforms.uTime.value += dt;
+    // Open but not yet sealed: waiting for the player to actually get through.
+    if (this.open && !this.sealed && this.#hasCrossed()) {
+      this.seal();
+      return;
+    }
     if (this.open || this.sealed) return;
 
     const dist = this.player.position.distanceTo(this.position);
@@ -120,14 +127,41 @@ export class FogGate {
     this.engine.resolve('physics').removeBody(this.barrierBody);
     this.barrierBody = null;
 
-    // Push the player through, then seal behind them.
+    // Seal behind the player, once there IS a behind.
+    //
+    // This used to be `setTimeout(() => this.seal(), 900)`, on the comment
+    // "push the player through, then seal behind them" — and nothing pushed.
+    // So the fight began, 900ms of wall-clock elapsed, and the barrier came
+    // back with the player still on the near side: locked out of an encounter
+    // that had already started, with no prompt left to re-enter by. The prompt
+    // fires from up to 3m out and the gate is 0.6m thick, so walking that in
+    // under 900ms was never guaranteed — and on a slow frame or a stalled tab
+    // it simply does not happen. Found by tools/playthrough.mjs.
+    //
+    // Which side counts as "behind" is recorded here rather than assumed: the
+    // barrier's thin axis is its local Z, so yawing by `facing` makes
+    // (sin, 0, cos) the plane normal, and the sign of the player's offset along
+    // it is the side they are on.
+    this.crossNormal = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
+    this.enterSide = Math.sign(_v.subVectors(this.player.position, this.position).dot(this.crossNormal)) || 1;
+
     this.onEnter?.();
-    setTimeout(() => this.seal(), 900);
+  }
+
+  /** True once the player has come out the far side of the doorway. */
+  #hasCrossed() {
+    if (!this.crossNormal) return false;
+    const side = _v.subVectors(this.player.position, this.position).dot(this.crossNormal);
+    // A clear margin past the plane, not merely on it — standing in the
+    // doorway is not through it, and sealing there would trap the capsule
+    // inside the barrier.
+    return side * this.enterSide < -0.8;
   }
 
   seal() {
     if (!this.open) return;
     this.sealed = true;
+    this.crossNormal = null;
     const { body } = this.engine.resolve('physics').addStaticBox(
       new THREE.Vector3(5.0, 4.2, 0.6),
       new THREE.Vector3(this.position.x, this.position.y + 2.1, this.position.z),
@@ -152,6 +186,7 @@ export class FogGate {
   reset() {
     this.open = false;
     this.sealed = false;
+    this.crossNormal = null;
     this.mesh.visible = true;
     this.material.uniforms.uOpacity.value = 0.62;
     if (!this.barrierBody) {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { makeGlow } from '../render/procedural/textures.js';
+import { makeGlow } from '../render/npr/Glow.js';
 
 const _one = new THREE.Vector3(1, 1, 1);
 
@@ -48,22 +49,17 @@ function featherGeometry(length, width, curve) {
 export function buildLightWings() {
   const group = new THREE.Group();
 
-  const gold = new THREE.MeshStandardMaterial({
-    color: 0xc9a55e, roughness: 0.34, metalness: 0.78,
-    emissive: 0x6b4d18, emissiveIntensity: 0.30,
-  });
-  const darkWood = new THREE.MeshStandardMaterial({
-    color: 0x241c14, roughness: 0.72, metalness: 0.12,
-  });
-  // Emissive kept low deliberately. These feathers are lit by a real lamp, and
-  // a pale albedo plus a strong emissive plus that lamp plus bloom is four
-  // ways of saying "bright" stacked on one surface — the result is a white
-  // blob with no internal value, which is exactly the rubric's grayscale
-  // failure. The layered feather structure has to survive the light.
-  const pale = new THREE.MeshStandardMaterial({
-    color: 0xf2ead8, roughness: 0.46, metalness: 0.06,
-    emissive: 0xbfa877, emissiveIntensity: 0.20,
-  });
+  // Gold leaf over dark wood, per PROJECT.md's Garuda/Kinnara direction. Under
+  // cel shading "gold" is a hue and a tight bright rim, not a metalness value
+  // — a specular highlight is the one read this renderer will not give you.
+  const gold = toonMaterial({ color: 0xc9a55e, bands: 4, rim: 0xffe6a8, rimStrength: 1.0, rimPower: 3.4 });
+  const darkWood = toonMaterial({ color: 0x241c14, bands: 3, rimStrength: 0.5 });
+  // The pale feathers stay a mid-high value rather than near-white. Radiance
+  // used to be spelled four ways at once — pale albedo, emissive, a real lamp
+  // and a bloom pass — and stacking them produced a white blob with no
+  // internal value, which is exactly the rubric's grayscale failure. The
+  // layered feather structure has to survive the light.
+  const pale = toonMaterial({ color: 0xe4dcc8, bands: 4, rim: 0xfff6e0, rimStrength: 0.9, rimPower: 2.2 });
 
   /**
    * Two pairs, not one. The concept board shows a four-winged Garuda-derived
@@ -169,13 +165,13 @@ export function buildLightWings() {
 export function buildDarkWings() {
   const group = new THREE.Group();
 
-  const membrane = new THREE.MeshStandardMaterial({
-    color: 0x14100f, roughness: 0.58, metalness: 0.06,
+  // Two bands, not three: the dark wing absorbs light, and a membrane that
+  // resolves into a shading gradient reads as leather rather than as a hole.
+  const membrane = toonMaterial({
+    color: 0x14100f, bands: 2, rim: 0x4a2f4d, rimStrength: 0.75, rimPower: 1.8,
     side: THREE.DoubleSide, transparent: true, opacity: 0.94,
   });
-  const boneMat = new THREE.MeshStandardMaterial({
-    color: 0x2b2420, roughness: 0.52, metalness: 0.22,
-  });
+  const boneMat = toonMaterial({ color: 0x2b2420, bands: 3, rim: 0x6b5a52, rimStrength: 0.7, rimPower: 3.0 });
 
   for (const side of [-1, 1]) {
     const wing = new THREE.Group();

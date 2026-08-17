@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { EVENTS } from '../core/EventBus.js';
 import { VARIANT } from '../core/GameState.js';
-import { makeGlow } from '../render/procedural/textures.js';
+import { makeGlow } from '../render/npr/Glow.js';
 
 const _v = new THREE.Vector3();
 

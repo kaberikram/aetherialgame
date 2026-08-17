@@ -1,8 +1,9 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 import { EVENTS } from '../core/EventBus.js';
 import { TUNING } from '../tuning.js';
 import { ACTION } from '../input/Actions.js';
-import { makeGlow } from '../render/procedural/textures.js';
+import { makeGlow } from '../render/npr/Glow.js';
 
 const _v = new THREE.Vector3();
 
@@ -48,7 +49,7 @@ export class CheckpointSystem {
     // stop, not a monument.
     const base = new THREE.Mesh(
       new THREE.CylinderGeometry(0.42, 0.52, 0.26, 8),
-      new THREE.MeshStandardMaterial({ color: 0x54585e, roughness: 0.95 })
+      toonMaterial({ color: 0x54585e, bands: 3, rimStrength: 0.4 })
     );
     base.position.y = 0.13;
     base.castShadow = true;
@@ -57,7 +58,7 @@ export class CheckpointSystem {
 
     const spike = new THREE.Mesh(
       new THREE.CylinderGeometry(0.035, 0.06, 0.72, 6),
-      new THREE.MeshStandardMaterial({ color: 0x2f2c29, roughness: 0.7, metalness: 0.4 })
+      toonMaterial({ color: 0x2f2c29, bands: 3, rimStrength: 0.65, rimPower: 3.0 })
     );
     spike.position.y = 0.62;
     spike.castShadow = true;
@@ -70,6 +71,11 @@ export class CheckpointSystem {
     const light = new THREE.PointLight(0xffa554, 2.2, 7, 2);
     light.position.y = 1.0;
     group.add(light);
+
+    // Drawn, never collided with — you walk through a checkpoint, you do not
+    // step over it. Saying so keeps the collision audit from reading the 26cm
+    // marker base as the floor and reporting it as collider drift.
+    group.traverse((o) => { o.userData.noCollide = true; });
 
     this.scene.add(group);
     const cp = { id, position: position.clone(), facing, group, flame, light };

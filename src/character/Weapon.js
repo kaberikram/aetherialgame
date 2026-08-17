@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 
 /**
  * The sword from beat 5.
@@ -15,21 +16,14 @@ import * as THREE from 'three';
 export function buildSword() {
   const group = new THREE.Group();
 
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0x8f959c,
-    roughness: 0.38,
-    metalness: 0.82,
-  });
-  const dark = new THREE.MeshStandardMaterial({
-    color: 0x2e2b28,
-    roughness: 0.85,
-    metalness: 0.15,
-  });
-  const leather = new THREE.MeshStandardMaterial({
-    color: 0x4a3d33,
-    roughness: 0.92,
-    metalness: 0.0,
-  });
+  // "Cold steel, no glow, no rarity colour" under cel shading means a tight,
+  // bright rim and nothing else. There is no specular highlight in this
+  // renderer to carry "metal", so the rim does that job: four bands and a
+  // high rimPower reads as a hard edge catching light, which is what a blade
+  // is. Emissive would read as a magic weapon, which PROJECT.md forbids here.
+  const steel = toonMaterial({ color: 0x8f959c, bands: 4, rim: 0xdfe6ee, rimStrength: 0.85, rimPower: 3.6 });
+  const dark = toonMaterial({ color: 0x2e2b28, bands: 3, rimStrength: 0.45 });
+  const leather = toonMaterial({ color: 0x4a3d33, bands: 3, rimStrength: 0.3 });
 
   // Blade: 0.92m, tapering, with a shallow fuller implied by the flat section.
   const blade = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.86, 0.014), steel);

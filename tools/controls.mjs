@@ -244,6 +244,179 @@ async function main() {
     await lookCase('mouse left', -220, 0, { axis: 'yaw', sign: +1, text: 'view turns left' });
     console.log();
 
+    // ---- tap versus hold on the dodge key --------------------------------
+    // The load-bearing change of the Elden Ring pass: Space taps into a roll
+    // and holds into a sprint. Moving the roll's trigger from press to release
+    // touches the buffer, the coyote window and the roll-cancel rule, so it
+    // gets a test that drives the real key rather than reading the code.
+    console.log('  dodge key      result                        expected            verdict');
+    console.log('  ' + '─'.repeat(74));
+
+    const dodgeCase = async (label, holdSteps, expect) => {
+      await page.evaluate(() => {
+        const api = window.__VESSEL_API;
+        api.player.respawn({ x: 0, y: 0.6, z: 34 }, Math.PI);
+        api.cameraRig.enabled = true;
+        window.__seen = { roll: false, sprint: false };
+      });
+      await pump(30);
+
+      // Walk first: a sprint from standing is a different code path, and
+      // "hold to sprint" is a thing you do while already moving.
+      await page.keyboard.down('KeyW');
+      await pump(20);
+      await page.keyboard.down('Space');
+
+      // Sample every step, because both outcomes are transient — a roll is
+      // ~54 frames and `isSprinting()` is only true while the key is down.
+      const watch = (n) => page.evaluate((count) => {
+        const api = window.__VESSEL_API;
+        const engine = window.__VESSEL;
+        const input = api.engine.resolve('input');
+        engine.setPaused(true);
+        for (let i = 0; i < count; i++) {
+          engine.stepOnce();
+          if (api.player.state === 'roll') window.__seen.roll = true;
+          if (input.isSprinting()) window.__seen.sprint = true;
+        }
+        engine.setPaused(false);
+      }, n);
+
+      await watch(holdSteps);
+      await page.keyboard.up('Space');
+      await watch(40);
+      await page.keyboard.up('KeyW');
+      await pump(10);
+
+      const seen = await page.evaluate(() => window.__seen);
+      const ok = seen.roll === expect.roll && seen.sprint === expect.sprint;
+      if (!ok) exitCode = 1;
+      const got = `roll ${seen.roll ? 'yes' : 'no '}  sprint ${seen.sprint ? 'yes' : 'no '}`;
+      console.log(
+        `  ${label.padEnd(14)} ${got.padEnd(29)} ${expect.text.padEnd(19)} ${ok ? '✓' : '✗'}`
+      );
+    };
+
+    // sprintHoldFrames is 10, so 4 steps is unambiguously a tap and 40 is
+    // unambiguously a hold.
+    await dodgeCase('tap (4 steps)', 4, { roll: true, sprint: false, text: 'roll, no sprint' });
+    await dodgeCase('hold (40)', 40, { roll: false, sprint: true, text: 'sprint, no roll' });
+    console.log();
+
+    // ---- crouch ----------------------------------------------------------
+    // A toggle on C, and it has to actually change the body — a crouch that
+    // only plays an animation is a button that changes nothing.
+    console.log('  crouch         result                        expected            verdict');
+    console.log('  ' + '─'.repeat(74));
+
+    const standing = await page.evaluate(() => {
+      const api = window.__VESSEL_API;
+      api.player.respawn({ x: 0, y: 0.6, z: 34 }, Math.PI);
+      return api.player.collider.halfHeight();
+    });
+    await pump(30);
+    await page.keyboard.press('KeyC');
+    await pump(20);
+    const crouched = await page.evaluate(() => ({
+      half: window.__VESSEL_API.player.collider.halfHeight(),
+      state: window.__VESSEL_API.player.state,
+    }));
+    await page.keyboard.press('KeyC');
+    await pump(20);
+    const stoodBack = await page.evaluate(() => ({
+      half: window.__VESSEL_API.player.collider.halfHeight(),
+      state: window.__VESSEL_API.player.state,
+    }));
+
+    for (const [label, got, want, ok] of [
+      ['C once', `halfHeight ${standing.toFixed(2)} → ${crouched.half.toFixed(2)}, state ${crouched.state}`,
+        'capsule shrinks', crouched.half < standing - 0.2 && crouched.state === 'crouch'],
+      ['C again', `halfHeight ${stoodBack.half.toFixed(2)}, state ${stoodBack.state}`,
+        'capsule restored', Math.abs(stoodBack.half - standing) < 1e-6 && stoodBack.state !== 'crouch'],
+    ]) {
+      if (!ok) exitCode = 1;
+      console.log(`  ${label.padEnd(14)} ${got.padEnd(29)} ${want.padEnd(19)} ${ok ? '✓' : '✗'}`);
+    }
+    console.log();
+
+    // ---- the crawl -------------------------------------------------------
+    // Crouch needs somewhere to crouch or the button is decoration. The
+    // Descent's lower route has ~1.25m of clearance under a slab, against a
+    // 1.68m standing capsule and a 1.16m crouched one — so this asserts BOTH
+    // halves: you cannot walk it, and you can crawl it. The grid sweep cannot
+    // see this, because a downward probe lands on top of the slab.
+    const crawl = await page.evaluate(() => {
+      const api = window.__VESSEL_API;
+      const engine = window.__VESSEL;
+      const input = api.engine.resolve('input');
+      input.enabled = false;
+      engine.setPaused(true);
+
+      const run = (crouch) => {
+          // On the lower route's floor, which is y −10.65 at z 15.6 — the first
+        // draft spawned at −11.0, i.e. inside it, so the standing run began by
+        // being squeezed out of the geometry and its result meant nothing.
+        api.player.respawn({ x: -0.98, y: -10.2, z: 15.6 }, Math.PI);
+        // `input.move` is CAMERA-relative, and the rig is still wherever the
+        // strafe cases left it. Camera forward is (−sin yaw, 0, −cos yaw), so
+        // yaw 0 is the only value that makes move (0,1) mean −z — which is the
+        // direction the crawl runs. Without this the bot walks off diagonally
+        // and the test reports the crawl passable because it never entered it.
+        api.cameraRig.snap({ yaw: 0 });
+        for (let i = 0; i < 40; i++) engine.stepOnce();
+        if (crouch) {
+          for (let i = 0; i < 30; i++) {
+            input.actions.crouch.pressed = i === 0;
+            engine.stepOnce();
+          }
+          input.actions.crouch.pressed = false;
+        }
+        const from = api.player.position.z;
+        // 900 steps, because crouch speed is 0.45x walk and the slab's footprint
+        // is a rotated cuboid ~6.4m deep in z — a budget tuned to walking speed
+        // reports the crawl impassable when it is merely slow.
+        for (let i = 0; i < 900; i++) {
+          input.move.set(0, 1);
+          input.moveMagnitude = 1;
+          engine.stepOnce();
+        }
+        input.move.set(0, 0);
+        input.moveMagnitude = 0;
+        return {
+          travelled: +(from - api.player.position.z).toFixed(2),
+          z: +api.player.position.z.toFixed(2),
+          state: api.player.state,
+        };
+      };
+
+      const walked = run(false);
+      const crawled = run(true);
+      // Leave the world as it was found.
+      if (api.player.state === 'crouch') {
+        for (let i = 0; i < 30; i++) {
+          input.actions.crouch.pressed = i === 0;
+          engine.stepOnce();
+        }
+        input.actions.crouch.pressed = false;
+      }
+      engine.setPaused(false);
+      input.enabled = true;
+      return { walked, crawled };
+    });
+
+    console.log('  the crawl      result                        expected            verdict');
+    console.log('  ' + '─'.repeat(74));
+    // Judge on clearing the slab, not on distance travelled. The slab's box is
+    // rotated, so its z footprint is not the 13 → 9 the authoring coordinates
+    // suggest; "did you come out the far side" is the question either way, and
+    // it does not need the footprint solved to ask.
+    const walkBlocked = crawl.walked.z > 10.0;
+    const crawlPasses = crawl.crawled.z < 8.5;
+    if (!walkBlocked || !crawlPasses) exitCode = 1;
+    console.log(`  ${'standing'.padEnd(14)} ${`stopped at z ${crawl.walked.z} (${crawl.walked.travelled}m)`.padEnd(29)} ${'blocked (z>10)'.padEnd(19)} ${walkBlocked ? '✓' : '✗'}`);
+    console.log(`  ${'crouched'.padEnd(14)} ${`reached z ${crawl.crawled.z} (${crawl.crawled.travelled}m)`.padEnd(29)} ${'through (z<8.5)'.padEnd(19)} ${crawlPasses ? '✓' : '✗'}`);
+    console.log();
+
     if (errors.length) {
       console.log(`✗ ${errors.length} console error(s):`);
       for (const e of [...new Set(errors)].slice(0, 5)) console.log(`  ${e.slice(0, 200)}`);

@@ -29,7 +29,14 @@ export class Clock {
     this.#accumulator = 0;
   }
 
-  advance(paused = false) {
+  /**
+   * @param {boolean} paused
+   * @param {number} timeScale debug slow-motion. Scales how much real time is
+   *   fed to the accumulator — so fewer fixed steps run — rather than scaling
+   *   the step itself. The step must stay exactly 1/60 or frame data stops
+   *   meaning anything, and determinism goes with it.
+   */
+  advance(paused = false, timeScale = 1) {
     const now = performance.now();
     if (this.#last === 0) this.#last = now;
     // Clamp a single frame's contribution. 250ms is a quarter second of
@@ -47,8 +54,9 @@ export class Clock {
 
     if (paused) return { steps: 0, alpha: 1, delta };
 
-    this.elapsed += delta;
-    this.#accumulator += delta;
+    const scaled = delta * timeScale;
+    this.elapsed += scaled;
+    this.#accumulator += scaled;
 
     let steps = 0;
     while (this.#accumulator >= this.#fixedDelta && steps < this.#maxSubSteps) {
@@ -58,6 +66,6 @@ export class Clock {
     // Backlog beyond maxSubSteps is discarded rather than deferred.
     if (this.#accumulator > this.#fixedDelta) this.#accumulator = 0;
 
-    return { steps, alpha: this.#accumulator / this.#fixedDelta, delta };
+    return { steps, alpha: this.#accumulator / this.#fixedDelta, delta: scaled };
   }
 }

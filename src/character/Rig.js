@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/npr/ToonMaterial.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
@@ -242,7 +243,10 @@ export function buildCharacter({
 
   const mesh = new THREE.SkinnedMesh(
     geometry,
-    material ?? new THREE.MeshStandardMaterial({ color: 0x8d939c, roughness: 0.82, metalness: 0.0 })
+    // Four bands rather than three: a character carries the read of the frame
+    // and needs one more step to hold form at 10% screen height, which is the
+    // silhouette test in PROJECT.md's rubric.
+    material ?? toonMaterial({ color: 0x8d939c, bands: 4, rimStrength: 0.55, rimPower: 2.4 })
   );
   mesh.castShadow = true;
   mesh.receiveShadow = true;

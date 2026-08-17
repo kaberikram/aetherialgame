@@ -15,6 +15,7 @@ import { PLAYER_MOVES, OPENERS, getMove } from '../combat/data/playerMoves.js';
 import { buildSword } from './Weapon.js';
 import { Alignment } from './Alignment.js';
 import { Flight } from './Flight.js';
+import { FILTERS } from '../physics/PhysicsWorld.js';
 
 export const STATE = Object.freeze({
   DRIFT: 'drift',         // beat 1: a formless light, weightless, no collision
@@ -28,6 +29,7 @@ export const STATE = Object.freeze({
   LAND_HARD: 'landHard',
   ROLL: 'roll',
   BACKSTEP: 'backstep',
+  CROUCH: 'crouch',
   ATTACK: 'attack',
   GUARD: 'guard',
   DEFLECT: 'deflect',
@@ -55,6 +57,11 @@ const _v2 = new THREE.Vector3();
 const _flat = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _up = new THREE.Vector3(0, 1, 0);
+const _groundHit = new THREE.Vector3();
+/** Reused across every contact read, so the fixed step allocates nothing. */
+let _collision = null;
+/** cos of the climb limit: above this a surface is floor, below it is wall. */
+const _maxSlopeCos = Math.cos(THREE.MathUtils.degToRad(TUNING.movement.maxSlopeDegrees));
 
 /**
  * PlayerController — owns the player state machine and turns input intent into
@@ -357,11 +364,24 @@ export class PlayerController {
     if (inp.actions[ACTION.JUMP].pressed) this.jumpBufferFrames = TUNING.movement.jumpBufferFrames;
     else if (this.jumpBufferFrames > 0) this.jumpBufferFrames--;
 
-    // --- dodge -----------------------------------------------------------
-    if (inp.actions[ACTION.DODGE].pressed) {
+    // --- dodge -------------------------------------------------------------
+    // Fires on the RELEASE edge, and only for a tap. Elden Ring shares this
+    // button with sprint, so a press on its own is ambiguous: it is a roll
+    // only once the player lets go without having held it long enough to
+    // sprint. `isDodgeTap()` is that test, and it is the reason the roll here
+    // costs the duration of your own tap in latency.
+    //
+    // Buffering still keys off the same edge, so a tap during recovery queues
+    // a roll and a hold during recovery queues nothing — which is right: you
+    // cannot buffer a sprint.
+    if (inp.isDodgeTap()) {
       if (this.canAct()) this.#tryDodge();
       else if (this.#inRecovery()) this.buffer.push(ACTION.DODGE, inp.move, frame);
     }
+
+    // --- crouch ------------------------------------------------------------
+    // A toggle, not a hold: Elden Ring's L3 is "Crouch/Stand up".
+    if (inp.actions[ACTION.CROUCH].pressed) this.#toggleCrouch();
 
     // --- attacks ---------------------------------------------------------
     for (const [action, kind] of [[ACTION.LIGHT_ATTACK, 'light'], [ACTION.HEAVY_ATTACK, 'heavy']]) {
@@ -405,6 +425,12 @@ export class PlayerController {
   #tryDodge(moveOverride = null) {
     if (!this.grounded && this.coyoteFrames <= 0) return;
     if (!this.stamina.canAct) return;
+    if (!this.#standIfCrouched()) return;
+    // Landing recovery. CONTROLS.md has always documented this window as
+    // "cannot attack or roll during this", and it was never actually enforced
+    // — `jumpRecoveryFrames` was read by nothing. Rolling out of a landing on
+    // frame one is exactly the kind of escape hatch this genre does not have.
+    if (this.state === STATE.LAND && this.stateFrame < TUNING.movement.jumpRecoveryFrames) return;
 
     // Direction is captured HERE, at the press, and never re-read during the
     // animation. A roll is a deliberate read of the stick at input time.
@@ -683,6 +709,10 @@ export class PlayerController {
     this.stamina.refill();
     this.refillFlask();
     this.invulnerable = false;
+    // Stand up. Dying crouched would otherwise respawn you with a half-height
+    // capsule and no way to notice until a ceiling did not stop you.
+    if (this.state === STATE.CROUCH) this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+    this.root.scale.y = 1;
     this.currentMove = null;
     this.chainQueued = null;
     this.buffer.clear();
@@ -694,9 +724,68 @@ export class PlayerController {
     this.bus.emit(EVENTS.PLAYER_RESPAWNED, { position });
   }
 
+  // ---------------------------------------------------------------- crouch
+
+  /**
+   * Crouch/stand, as a toggle.
+   *
+   * The capsule is genuinely resized rather than the mesh being scaled down,
+   * so a low passage is low for the physics too — a crouch that only changes
+   * what you look like is a crouch that does nothing.
+   *
+   * Standing is REFUSED when there is no headroom. Without that check the
+   * capsule grows inside a ceiling and Rapier resolves the overlap by
+   * ejecting the player through it, which is the single most obvious way a
+   * crouch implementation breaks.
+   */
+  #toggleCrouch() {
+    if (this.state === STATE.CROUCH) {
+      if (!this.#hasHeadroom()) return;
+      this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+      this.setState(STATE.IDLE, { force: true });
+      return;
+    }
+    if (!this.grounded || COMMITTED.has(this.state)) return;
+    this.#setCapsuleHeight(TUNING.movement.crouchHalfHeight);
+    this.setState(STATE.CROUCH, { force: true });
+    this.anim.play('idle', { fadeFrames: 6 });
+  }
+
+  /** True when the standing capsule would fit where the crouched one is. */
+  #hasHeadroom() {
+    const m = TUNING.movement;
+    const standing = m.capsuleHalfHeight + m.capsuleRadius;
+    const crouched = m.crouchHalfHeight + m.capsuleRadius;
+    _v.copy(this.position).setY(this.position.y + crouched * 2);
+    const hit = this.physics.raycast(_v, _up, (standing - crouched) * 2 + 0.1, { groups: FILTERS.camera });
+    return hit === null;
+  }
+
+  #setCapsuleHeight(halfHeight) {
+    this.collider.setHalfHeight(halfHeight);
+    const offset = halfHeight + TUNING.movement.capsuleRadius;
+    // The body's translation is the capsule CENTRE; `position` is the feet.
+    // Resizing about the centre would sink or launch the player by the
+    // difference, so the body is re-placed from the feet instead.
+    this.capsuleOffset = offset;
+    this.body.setTranslation(
+      { x: this.position.x, y: this.position.y + offset, z: this.position.z },
+      true
+    );
+  }
+
+  /** Crouching stands you up rather than being refused outright. */
+  #standIfCrouched() {
+    if (this.state !== STATE.CROUCH) return true;
+    if (!this.#hasHeadroom()) return false;
+    this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+    return true;
+  }
+
   // ------------------------------------------------------------------ jump
 
   #startJump() {
+    if (!this.#standIfCrouched()) return;
     this.setState(STATE.JUMP_START);
     this.anim.play('jumpStart', { fadeFrames: 3 });
   }
@@ -772,10 +861,36 @@ export class PlayerController {
     const mag = Math.min(1, Math.hypot(inp.move.x, inp.move.y));
     if (mag < 0.001) return 0;
     if (this.state === STATE.GUARD) return m.walkSpeed * 0.72; // guarding is slow
-    const wantsSprint = inp.actions[ACTION.SPRINT].held && mag > 0.7
+    if (this.state === STATE.CROUCH) return m.walkSpeed * m.crouchSpeedScale;
+    const wantsSprint = inp.isSprinting() && mag > 0.7
       && this.stamina.canAct && !this.stamina.exhausted;
-    if (wantsSprint) return m.sprintSpeed;
-    return THREE.MathUtils.lerp(m.walkSpeed * 0.55, m.runSpeed, Math.min(1, mag));
+    const base = wantsSprint
+      ? m.sprintSpeed
+      : THREE.MathUtils.lerp(m.walkSpeed * 0.55, m.runSpeed, Math.min(1, mag));
+    return base * this.#slopeSpeedScale();
+  }
+
+  /**
+   * Uphill costs speed; downhill does not give it back.
+   *
+   * `groundNormal` was declared in this class and never written or read, so
+   * every slope in the chapter walked exactly like flat ground — which is a
+   * strange thing for a chapter whose entire shape is a descent. Now that the
+   * floor is analytic ramps rather than a sampled trimesh, the normal is
+   * stable enough to drive feel off.
+   *
+   * Downhill deliberately does NOT speed the player up: free acceleration on a
+   * decline reads as losing control, and this chapter is one long decline.
+   */
+  #slopeSpeedScale() {
+    if (!this.grounded) return 1;
+    const m = TUNING.movement;
+    // The component of the facing direction that points uphill. Positive when
+    // climbing, negative when descending.
+    const climb = -(Math.sin(this.facing) * this.groundNormal.x
+      + Math.cos(this.facing) * this.groundNormal.z);
+    if (climb <= 0) return 1;
+    return THREE.MathUtils.lerp(1, m.slopeSpeedUphill, Math.min(1, climb / 0.6));
   }
 
   #updateMotion(dt) {
@@ -835,6 +950,7 @@ export class PlayerController {
 
     const wasGrounded = this.grounded;
     this.grounded = this.controller.computedGrounded();
+    this.#readContacts();
 
     const t = this.body.translation();
     const nx = t.x + corrected.x;
@@ -843,13 +959,71 @@ export class PlayerController {
     this.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
     this.position.set(nx, ny - this.capsuleOffset, nz);
 
-    if (Math.abs(corrected.x) < Math.abs(_v.x) * 0.5) this.velocity.x *= 0.2;
-    if (Math.abs(corrected.z) < Math.abs(_v.z) * 0.5) this.velocity.z *= 0.2;
+    // Wall scrub: when a wall stops you, most of your speed into it should go
+    // with it, or you peel along the surface at full pace and it reads as ice.
+    //
+    // This used to fire on *any* axis the controller shortened by more than
+    // half — which includes every legitimate step-up and every slope climb,
+    // because autostep and slope resolution both return less horizontal motion
+    // than was asked for. Walking up stairs cut your speed to a fifth on the
+    // frame each step was cleared, which is the stutter that made the descent
+    // feel bad. Now it needs an actual near-vertical surface in contact.
+    if (this.wallContact) {
+      if (Math.abs(corrected.x) < Math.abs(_v.x) * 0.5) this.velocity.x *= 0.2;
+      if (Math.abs(corrected.z) < Math.abs(_v.z) * 0.5) this.velocity.z *= 0.2;
+    }
 
     if (resolveLanding) this.#resolveGroundTransitions(wasGrounded);
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.facing;
+
+    // Sink the mesh with the capsule. Without this the character stands at
+    // full height inside a half-height collider and visibly clips ceilings the
+    // physics is correctly keeping them under.
+    const m = TUNING.movement;
+    const wantSquash = this.state === STATE.CROUCH
+      ? (m.crouchHalfHeight + m.capsuleRadius) / (m.capsuleHalfHeight + m.capsuleRadius)
+      : 1;
+    this.root.scale.y = THREE.MathUtils.damp(this.root.scale.y, wantSquash, 14, dt);
+  }
+
+  /**
+   * Reads what the capsule actually touched this step: the ground's normal,
+   * and whether anything near-vertical is in the way.
+   *
+   * `normal1` is the *collider's* normal — the surface the character hit —
+   * which is the one that describes the world. `normal2` is the character
+   * capsule's own and points back the other way.
+   */
+  #readContacts() {
+    // Allocated once, on the first step, and refilled in place thereafter.
+    // Rapier allocates a fresh CharacterCollision per call when `out` is
+    // omitted, and this runs for every contact of every fixed step.
+    if (!_collision) _collision = new this.physics.RAPIER.CharacterCollision();
+    const n = this.controller.numComputedCollisions();
+    this.wallContact = false;
+    let bestUp = -1;
+    for (let i = 0; i < n; i++) {
+      const hit = this.controller.computedCollision(i, _collision);
+      if (!hit) continue;
+      const ny = hit.normal1.y;
+      // A surface counts as a wall once it is too steep to stand on. Reusing
+      // the climb limit means "wall" and "cannot walk up this" are the same
+      // question, answered once.
+      if (Math.abs(ny) < _maxSlopeCos) this.wallContact = true;
+      if (ny > bestUp) {
+        bestUp = ny;
+        _groundHit.set(hit.normal1.x, ny, hit.normal1.z);
+      }
+    }
+    if (bestUp > _maxSlopeCos) this.groundNormal.copy(_groundHit).normalize();
+    else if (this.grounded) this.groundNormal.set(0, 1, 0);
+  }
+
+  /** Ground steepness in degrees. Read by the debug inspector. */
+  get slopeAngle() {
+    return THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(this.groundNormal.y, -1, 1)));
   }
 
   #waterSpeedScale() {
@@ -891,13 +1065,34 @@ export class PlayerController {
         } else if (impact > 5) {
           this.setState(STATE.LAND, { force: true });
           this.anim.play('land', { fadeFrames: 3 });
-        } else if (!COMMITTED.has(this.state)) {
+        } else if (!COMMITTED.has(this.state) && this.state !== STATE.CROUCH) {
+          // CROUCH is excluded deliberately. It is not a committed state — you
+          // can steer and stop out of it freely — but it owns a resized
+          // capsule, so anything that returns the machine to IDLE behind its
+          // back leaves the collider half-height with nothing tracking it.
           this.setState(STATE.IDLE);
         }
       }
     } else {
       if (this.coyoteFrames > 0) this.coyoteFrames--;
-      if (wasGrounded && !COMMITTED.has(this.state) && this.state !== STATE.AIRBORNE) {
+
+      // Crouch leaves the ground on its own terms.
+      //
+      // Shrinking the capsule lifts its bottom off the floor for a step or
+      // two before snap-to-ground catches up, so Rapier reports NOT grounded
+      // on the very frame you crouch. Letting the generic airborne transition
+      // see that cancels the crouch instantly and silently — it stood the
+      // player back up on the same frame they crouched, every time.
+      //
+      // Coyote time already exists to answer "has the player really left the
+      // ground, or is this a one-frame artefact", so it answers this too.
+      if (this.state === STATE.CROUCH) {
+        if (this.coyoteFrames <= 0) {
+          this.#setCapsuleHeight(TUNING.movement.capsuleHalfHeight);
+          this.setState(STATE.AIRBORNE, { force: true });
+          this.anim.play('fall', { fadeFrames: 8 });
+        }
+      } else if (wasGrounded && !COMMITTED.has(this.state) && this.state !== STATE.AIRBORNE) {
         this.setState(STATE.AIRBORNE);
         this.anim.play('fall', { fadeFrames: 8 });
       }
@@ -926,6 +1121,14 @@ export class PlayerController {
       case STATE.STAGGER:
         if (this.stateFrame >= TUNING.health.staggerFrames) this.setState(STATE.IDLE);
         return;
+      case STATE.CROUCH: {
+        // Crouched locomotion still blends the walk tree, just slower and with
+        // the root dropped — no new clips, which is the right call in a
+        // blockout.
+        const speed = Math.hypot(this.velocity.x, this.velocity.z);
+        this.#blendLocomotion(speed);
+        return;
+      }
       case STATE.JUMP_START:
       case STATE.AIRBORNE:
       case STATE.STAND_UP:

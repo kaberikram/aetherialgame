@@ -1,28 +1,26 @@
 # STATUS — where the build actually is
 
-Phases 0 through 6 of `PHASES.md` are built, verified and pushed. Phase 7 (the
-art pass) and the audio half of Phase 8 are in progress. Phases 9 and 10 are
-not started. This document is the honest handover.
+The chapter shipped its art pass in Phase 7 and became unplayable on the target
+machine. This build is the reset: **a cel-shaded grey-box blockout of the whole
+chapter, with the flow intact and combat stubbed**, rebuilt so that controls and
+navigation can be judged against geometry that is honest about what it is.
+
+Read `DECISIONS.md` D53–D61 for why each thing went. This document is the
+honest handover of what runs today.
 
 ## Run it
 
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run smoke        # headless boot + perf check (runs at quality=low)
-npm run rubric       # deterministic 1600x900 capture set for the critic pass
-node tools/smoke.mjs --script walk --shot frame
-node tools/rubric.mjs --only greenVein --port 5301   # one zone, for a tight loop
-node tools/probe.mjs --skipIntro --keys "Digit3:80" "api.player.state"
 ```
 
-`?quality=off|low|medium|high` on the URL selects the render preset. The smoke
-harness uses `low` because it is testing whether the game runs, not how it
-looks; the rubric harness uses `high`. See `src/render/quality.js`.
+`?quality=off|low|medium|high` selects the render preset (default `high`).
+`?bench` runs the fixed route through every zone and reports p50/p95 frame time.
+`?capture` enables `preserveDrawingBuffer` for the screenshot harnesses — it is
+off in normal play because it costs a back-buffer copy every frame.
 
 ## Controls
-
-Keyboard/mouse (tuned as a first-class scheme, not derived from the pad):
 
 | | |
 |---|---|
@@ -31,95 +29,122 @@ Keyboard/mouse (tuned as a first-class scheme, not derived from the pad):
 | **Space** | dodge / roll — direction from WASD at the press |
 | **Shift** | sprint |
 | **F** | jump; once wings resolve, takeoff and hold to flap-climb |
-| **LMB / RMB** | light / heavy attack |
-| **Q** | guard (hold) — a fresh press inside the window is a deflect |
-| **R** | flask · **E** interact · **Tab** lock-on · **C** alignment ability · **Esc** pause/controls |
+| **C** | crouch (a toggle, like Elden Ring's L3) |
+| **LMB / RMB** | light / strong attack · **Q** guard · **V** weapon art · **Tab** lock-on |
+| **R** | flask · **E** interact · **X** alignment ability · **Esc** pause |
 
-Gamepad follows `CONTROLS.md` exactly, including analog trigger deflect.
+On a pad the layout is Elden Ring's, verified button by button — see
+`CONTROLS.md`. **Tap B rolls, hold B sprints**; L3 crouches. Player-side combat
+is back (attacks, guard, deflect, lock-on, hitboxes); the boss AI is not.
 
-Debug: **F1** stats · **F2** hitboxes and frame data · **F3** state inspector ·
-**F4** gamepad overlay · **F8** pause (**.** steps one frame) ·
-**1–5** warp to zone · **8** wing choice · **9** boss fight · **-** die ·
-**=** refill flask · **Esc** pause / controls · **`** (backtick) skip the intro.
+Debug: **F1** stats · **F3** state inspector · **F4** gamepad overlay ·
+**F5** physics colliders · **F7** freecam · **F8** pause (**.** steps one frame) ·
+**F11** grayscale · **1–5** warp to zone · **8** wing choice · **9** boss ·
+**-** die · **=** refill flask · **[** **]** time scale · **`** skip the intro.
 
-## What is done
+## What this build is
 
-| Phase | State | Notes |
+| | |
+|---|---|
+| Renderer | NPR only. One cel material, one ink pass, no post chain, no tone mapping. `grep -rn 'MeshStandardMaterial\|MeshPhysicalMaterial' src/` is empty and that is the art-direction gate. |
+| Level | The full chapter at true scale, in grey boxes. Every waypoint, distance and pacing beat is the number it was. |
+| Flow | Intact end to end: void → embodiment → descent → sword → fog gate → boss → wings → flight → oculus. Beats 1–8 are a real enum (`narrative/Beats.js`) and all eight fire. |
+| Combat | **Player side only.** Attacks with real frame data, guard, deflect, lock-on, hitboxes and damage. The boss AI is still out. |
+| Boss | A stub with vitals and a hurtbox that you kill with R1. It keeps the chain from the fog gate to the wing choice unbroken; it does not fight back. |
+| Kept | Movement, camera, physics, stamina, vitals and the death/respawn loop, the alignment system, wings, flight, the pigeon, synthesised audio, the HUD. |
+
+## Measured
+
+Hardware-independent, from `node tools/perf.mjs`, against the previous build:
+
+| | before | after |
 |---|---|---|
-| 0 Foundation | done | Engine, fixed 60Hz step, EventBus, contracts, debug layout |
-| 1 Movement | done | Capsule, camera, roll, stamina, lock-on, void→body |
-| 2 Combat | done | Frame data, hitboxes, poise, deflect, flask, death loop |
-| 3 Boss | done | The Drowned, two phases, arena, fog gate, retry |
-| 4 Blockout | done | Whole chapter, void to oculus, SEA architecture kit |
-| 5 Wings | done | Seven-slot alignment, the choice, chamber reaction, flight |
-| 6 Companion | done | Pigeon, barks, and the three tells |
-| 7 Art pass | **first pass done** | Pipeline, materials, volumetrics, water, three zones |
-| 8 Motion & sound | **audio done** | Synthesis + reverb + footsteps; IK, ragdoll, VFX outstanding |
-| 9 Rubric & perf | **not started** | |
-| 10 Playable link | **not started** | |
+| scene passes / frame | 2 (10 at `ultra`) | **1** |
+| full-screen quads | 17 | **0** |
+| point lights | ~25 | **0** (one key, one fill, one hemisphere) |
+| draw calls, worst vantage | 821 | **105** |
+| triangles, worst vantage | ~350k | **3.6k** |
+| Green Vein collider vs its own height function | 0.55m | **0.01m** |
+| standable grid samples audited | 0 (centreline only) | **1,737** |
+| collider-vs-mesh disagreement, whole chapter | unmeasured | **none above 5cm** |
 
-## What is NOT done, in priority order
+Draw calls are 14× inside the 1,500 budget and triangles are ~100× down, so
+neither is the limit any more. **Frame time is still unmeasured on the target
+machine** — this container renders through SwiftShader, so every millisecond it
+reports is a fact about a software rasteriser (D51). `?bench` on the M1 is the
+number that settles the original complaint, and it has not been run.
 
-1. **The critic's outstanding defects (Phase 7, second loop).** One critic pass
-   has run against the concept boards. The chapter is not finished until its
-   ranked failures are closed — the loop is capped at five passes per zone and
-   has used one.
-2. **Foot IK, ragdoll, root-motion polish, VFX (Phase 8).** The audio half of
-   Phase 8 is done; the motion half is not. Wing-burst VFX, water displacement
-   beyond the existing boss breach, and impact effects are outstanding.
-3. **Performance (Phase 9).** No instancing, no LODs, no atlasing. Draw calls
-   peak at 821 of the 1,500 budget, which is fine — but triangles roughly
-   doubled during the art pass, to ~350k at the heaviest vantage, and that is
-   the number to watch. Nothing has been measured on hardware with a GPU.
-4. **Packaged playable build (Phase 10).**
-5. **The character himself.** The player mesh is still an untextured grey-white
-   mannequin in every frame. It is the most conspicuous unfinished thing in the
-   captures, and it belongs to the alignment system's seven slots rather than
-   to any zone, so no zone agent owned it.
+## What is NOT done
 
-## Known structural issue, worked around rather than fixed
+1. **Frame time on real hardware.** The whole point of the pass. Run `?bench`.
+2. **Controls tuning.** The defects found by audit are fixed (see D59, D60) and
+   the ground normal is now real, but the *feel* judgements are still open —
+   they are the human gates below.
+3. **The boss AI and the fight.** Player-side combat is back; the boss is still
+   a stub with a health pool and no moves.
+4. **The art pass.** Everything visible is a grey box with an ink line on it.
+   The cel pipeline is established; nothing has been designed with it yet.
+5. **God rays.** Deleted (D54). Under cel shading their replacement is drawn
+   geometry, which is art-pass work.
+6. **Cast shadows from anything but the key**, and no contact shadow under the
+   character. `Renderer.freezeShadows()` is in place for when casters return.
+7. **Rebinding.** `CONTROLS.md` has promised it since Phase 2 and it still does
+   not exist — no `Bindings` module, no rebind screen. The map is correct now
+   but it is not yet changeable.
+8. **Sprint attack, jump attack, roll-into-sprint.** Named in the Elden Ring
+   feel pass and not built. The bindings are the easy half; these are the half
+   that makes it read as Souls.
+9. **The beat sheet and the level disagree about the pool.** PROJECT.md puts the
+   Still Pool (beat 4) before the Sword (beat 5) — you are meant to be scared
+   while unarmed. The level puts the sword at z−30 and the pool at z−55, so
+   walking the chapter fires 5 before 4. `npm run playthrough` reports the order
+   every run. This is a design call, not a defect, and it is yours: either move
+   the sword past the pool approach, or renumber the beats.
 
-The Green Vein's walkable floor is built from 8m boxes that each sample
-`GREEN_VEIN_FLOOR(z)` at their own centre, so the boxes and the continuous
-function disagree by up to ~0.55m away from those centres. Anything that
-derives its height from the function rather than from the boxes will float or
-sink. The water ribbon works around this with a local helper that mirrors the
-box selection. Fixing it properly means rebuilding collision geometry that has
-already passed its pacing gate, so it was deliberately left alone.
+## Verification
 
-## Performance caveat
+```bash
+npm run smoke        # headless boot, zero console errors, perf counters
+npm run controls     # strafe/look, tap-vs-hold dodge, crouch, the crawl
+npm run collision    # ground, continuity, spawns, grid sweep, wedges
+npm run playthrough  # plays the chapter void → oculus and checks all 8 beats
+node tools/perf.mjs  # scene passes, draw calls, triangles, pixels per frame
+npm run build        # production build
+```
 
-All numbers in the commit messages come from headless Chromium on SwiftShader
-(software GL). **Reported FPS is a floor and CPU frame time is inflated** —
-render *dispatch* dominates there in a way it will not on a real GPU. Draw
-calls and triangle counts are accurate. The budget in `PROJECT.md` (60fps at
-1440p, <1,500 draw calls, <4ms CPU) has not been measured on the hardware it
-describes.
+All five pass on this build, and `npm run build` succeeds. `tools/rubric.mjs`
+still runs but has nothing to judge yet — it captured against concept boards, and
+there is no art in frame.
+
+**`npm run playthrough` is the one that matters most**, because it is the only
+one that plays the game. It found six bugs nothing else could have: a beat with
+no emitter, a fog gate that re-sealed with the player locked outside it, an open
+pit around the boss arena, a containment ring that both leaked and blocked the
+only way in, a final room that could not be entered on foot, and temple steps
+too tall to climb. See DECISIONS D62–D66.
 
 ## Gates that are yours, not mine
 
-`PHASES.md` reserves the Phase 1–4 gates for a human, and it is right to. I can
-verify frame data, silhouette readability, draw calls and grayscale value
-structure. I cannot tell you whether the roll feels good or whether the grey-box
-boss was fun. Those four gates are **passed provisionally on my judgement only**:
+`PHASES.md` reserves the feel gates for a human and it is right to. Every
+constant they bear on is in `src/tuning.js`, so notes turn into single-number
+edits.
 
-- **P1** — does moving around an empty grey room feel good on its own?
-- **P2** — does an attack feel like a decision you are committed to? Can you
-  deflect on reaction?
-- **P3** — was the fight fun while made of grey boxes?
+- **P1** — does moving around the blockout feel good on its own? Specifically:
+  the Green Vein slope, the Descent step-ups, and the 2.6m jump.
 - **P4** — is the pacing right? Is the descent too long? Does the Star Chamber
-  feel big?
+  feel big? This is easier to answer now than it was: nothing in frame is
+  distracting from the shape of the space.
 
-Every constant those questions bear on is in `src/tuning.js`, so notes turn
-into single-number edits rather than refactors.
+Two things worth doing on the first run: press **F5** and walk the whole
+chapter — every surface you can stand on should have a collider under it and
+none should float. Then press **F11** and check the frame still reads in
+grayscale, which is the rubric line the blockout is most at risk of failing.
 
-## Two things worth knowing before you tune
+## One design note that is not a defect
 
-- Combat frame data and animation keys are the **same numbers** — a move's
-  `active: [12, 17]` in `combat/data/playerMoves.js` refers to the same frames
-  as the keys in `character/clips/attacks.js`. Retiming a swing means editing
-  both, and they cannot silently disagree.
-- Attack arcs are constrained by rig geometry in a way that is easy to get
-  wrong by eye. `upperArm.x` past −90° points the arm *upward* and the blade
-  sails over everything. See DECISIONS.md D15; `tools/probe.mjs --pre` can
-  instrument the fixed step to measure real capsule gaps.
+The Descent's 2.6m gap has a **second, lower path underneath it**. Missing the
+jump drops you 3.8m onto a longer, gentler route that rejoins the main line at
+the bottom — it costs the walk, not health. That is deliberate: it is the first
+jump the game asks for, and the lesson should be "jumps are a thing you do", not
+"jumps are a thing you die to". It also means the critical path has ground
+beneath it everywhere, which the collision audit requires.

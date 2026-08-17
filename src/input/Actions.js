@@ -11,7 +11,8 @@ export const ACTION = Object.freeze({
   HEAVY_ATTACK: 'heavyAttack',
   ALIGNMENT_ABILITY: 'alignmentAbility',
   GUARD: 'guard', // analog: value is how far the trigger is pulled
-  SPRINT: 'sprint',
+  SPRINT: 'sprint', // keyboard only — the pad derives it from a held DODGE
+  CROUCH: 'crouch',
   LOCK_ON: 'lockOn',
   INTERACT: 'interact',
   CYCLE_ITEM_NEXT: 'cycleItemNext',
@@ -38,27 +39,47 @@ export const PAD = Object.freeze({
 });
 
 /**
- * Default gamepad layout — the Elden Ring layout specified in CONTROLS.md.
- * Attacks on the shoulders, utility on the face buttons.
+ * Default gamepad layout — **the actual Elden Ring layout**, verified against
+ * the published control tables rather than reconstructed from memory.
+ *
+ * The previous version of this table claimed to be that layout and was not.
+ * Four things were wrong, and each one was load-bearing:
+ *
+ *   - **Sprint was on L3.** Elden Ring has no dedicated sprint button. You tap
+ *     B to roll and hold B to sprint, and the two competing for the same
+ *     finger is a design decision, not an accident of button count.
+ *   - **L3 was therefore not crouch**, which is what it is in Elden Ring.
+ *   - **Y was the weapon art.** In Elden Ring Y is Event Action — interact.
+ *     The skill lives on LT and guard on LB.
+ *   - **INTERACT was bound to A, the same button as JUMP.** Two actions on one
+ *     button, with the ambiguity deferred to "resolved downstream". That makes
+ *     every interact next to a ledge a coin flip, which is precisely the
+ *     failure the keyboard table below warns about for a different pair.
+ *     Moving interact to Y fixes the bug and matches Elden Ring in one edit.
  */
 export const DEFAULT_GAMEPAD_BINDINGS = Object.freeze({
   [ACTION.JUMP]: { button: PAD.A },
+  // Tap rolls, hold sprints. See InputSystem.isSprinting().
   [ACTION.DODGE]: { button: PAD.B },
   [ACTION.USE_ITEM]: { button: PAD.X },
-  [ACTION.WEAPON_ART]: { button: PAD.Y },
+  [ACTION.INTERACT]: { button: PAD.Y },
   [ACTION.LIGHT_ATTACK]: { button: PAD.RB },
   [ACTION.HEAVY_ATTACK]: { button: PAD.RT, analog: true },
-  [ACTION.ALIGNMENT_ABILITY]: { button: PAD.LB },
-  [ACTION.GUARD]: { button: PAD.LT, analog: true },
-  [ACTION.SPRINT]: { button: PAD.L3 },
+  [ACTION.GUARD]: { button: PAD.LB },
+  [ACTION.WEAPON_ART]: { button: PAD.LT, analog: true },
+  [ACTION.CROUCH]: { button: PAD.L3 },
   [ACTION.LOCK_ON]: { button: PAD.R3 },
-  [ACTION.INTERACT]: { button: PAD.A }, // context-sensitive, resolved downstream
   [ACTION.CYCLE_ITEM_NEXT]: { button: PAD.DPAD_UP },
   [ACTION.CYCLE_ITEM_PREV]: { button: PAD.DPAD_DOWN },
   [ACTION.CYCLE_SKILL_NEXT]: { button: PAD.DPAD_RIGHT },
   [ACTION.CYCLE_SKILL_PREV]: { button: PAD.DPAD_LEFT },
   [ACTION.PAUSE]: { button: PAD.MENU },
   [ACTION.MAP]: { button: PAD.VIEW },
+  // ALIGNMENT_ABILITY has no Elden Ring equivalent — it is this game's own
+  // verb. It rides the skill button, which is where a weapon art would live.
+  [ACTION.ALIGNMENT_ABILITY]: { button: PAD.LT, analog: true },
+  // SPRINT is deliberately unbound on the pad. It is derived from a held
+  // DODGE, which is the whole point.
 });
 
 /**
@@ -72,19 +93,29 @@ export const DEFAULT_GAMEPAD_BINDINGS = Object.freeze({
  * collapsing them onto one key the way some ports do makes every ledge a coin flip.
  */
 export const DEFAULT_KBM_BINDINGS = Object.freeze({
-  // Dodge gets Space and jump gets F, which inverts what CONTROLS.md suggests
-  // in passing. The reason: a roll is the most-pressed button in the genre and
-  // it has to fire on the press, instantly. Sharing a key with sprint (tap to
-  // roll, hold to sprint) forces the roll to wait for the release to
-  // disambiguate, and every sprint then opens with an unwanted roll.
+  // Space both rolls (tap) and sprints (hold), matching the pad — but Shift
+  // ALSO sprints, and that redundancy is deliberate.
+  //
+  // The original comment here objected to sharing the key at all: "a roll has
+  // to fire on the press, instantly … every sprint then opens with an unwanted
+  // roll." The second half is answered by firing the roll on RELEASE, and only
+  // when released before the hold threshold — hold past it and you sprint with
+  // no roll at all. The first half stands: a tap-released roll carries the
+  // duration of your own tap as latency. Elden Ring accepts that on the pad.
+  //
+  // Keeping Shift means a mouse player who wants the zero-latency roll can
+  // still have it: press Space and never hold it, sprint with Shift.
   [ACTION.DODGE]: { keys: ['Space'] },
   [ACTION.JUMP]: { keys: ['KeyF'] },
   [ACTION.SPRINT]: { keys: ['ShiftLeft', 'ShiftRight'] },
+  [ACTION.CROUCH]: { keys: ['KeyC'] },
   [ACTION.USE_ITEM]: { keys: ['KeyR'] },
   [ACTION.WEAPON_ART]: { keys: ['KeyV'] },
   [ACTION.LIGHT_ATTACK]: { mouse: [0] },
   [ACTION.HEAVY_ATTACK]: { mouse: [2] },
-  [ACTION.ALIGNMENT_ABILITY]: { keys: ['KeyC'] },
+  // Was KeyC, which crouch now owns. The alignment ability is this game's own
+  // verb and has no Elden Ring key to match, so it takes the free one.
+  [ACTION.ALIGNMENT_ABILITY]: { keys: ['KeyX'] },
   [ACTION.GUARD]: { keys: ['KeyQ'], mouse: [1] },
   [ACTION.LOCK_ON]: { keys: ['Tab'] },
   [ACTION.INTERACT]: { keys: ['KeyE'] },

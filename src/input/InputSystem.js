@@ -31,6 +31,26 @@ class ActionState {
   value = 0;         // analog depth, 0..1
   prevValue = 0;
   heldFrames = 0;
+  /**
+   * How long the button had been held at the moment it was released, captured
+   * on the release frame only and 0 otherwise.
+   *
+   * `heldFrames` is reset to 0 the instant `held` goes false, which is the
+   * same frame `released` fires — so a consumer that reads `heldFrames` on the
+   * release edge always sees 0 and cannot tell a tap from a two-second hold.
+   * That distinction is the whole of tap-to-roll / hold-to-sprint.
+   */
+  releasedAfterFrames = 0;
+  /**
+   * A press that began AND ended without ever being observed as held.
+   *
+   * On a frame hitch — or simply a fast tap — a keydown/keyup pair can land
+   * entirely between two sampled steps. The step that follows sees the key
+   * already up, so `held` is never true and no release edge ever fires. For a
+   * button whose tap and hold mean different things, that press would be lost
+   * completely. This flags it as unambiguously a tap.
+   */
+  tapped = false;
   /** Analog travel per second — the signal a deflect is read from. */
   velocity = 0;
 }
@@ -230,6 +250,8 @@ export class InputSystem {
       s.held = false;
       s.value = 0;
       s.heldFrames = 0;
+      s.releasedAfterFrames = 0;
+      s.tapped = false;
     }
     this.move.set(0, 0);
     this.moveMagnitude = 0;
@@ -258,6 +280,7 @@ export class InputSystem {
       s.prevValue = s.value;
       s.pressed = false;
       s.released = false;
+      s.tapped = false;
     }
 
     if (this.device === 'gamepad' && pad) this.#sampleGamepad(pad, dt);
@@ -266,6 +289,9 @@ export class InputSystem {
     for (const a of ALL_ACTIONS) {
       const s = this.actions[a];
       s.velocity = (s.value - s.prevValue) / dt;
+      // Captured BEFORE the reset below, or the duration is gone by the time
+      // anything can read it. See ActionState.releasedAfterFrames.
+      s.releasedAfterFrames = s.released ? s.heldFrames : 0;
       s.heldFrames = s.held ? s.heldFrames + 1 : 0;
       if (s.pressed) this.bus.emit(EVENTS.INPUT_ACTION, { action: a, phase: 'pressed', value: s.value });
       if (s.released) this.bus.emit(EVENTS.INPUT_ACTION, { action: a, phase: 'released', value: s.value });
@@ -320,6 +346,7 @@ export class InputSystem {
       s.held = held;
       s.pressed = held && !wasHeld;
       s.released = !held && wasHeld;
+      s.tapped = false; // a pad is polled, so there is no sub-sample edge to miss
     }
   }
 
@@ -398,6 +425,9 @@ export class InputSystem {
       // silently dropped — which reads to the player as the game ignoring them.
       s.pressed = (held && !wasHeld) || (fresh && !wasHeld);
       s.released = !held && wasHeld;
+      // Began and ended inside one step: a tap, and the only chance anything
+      // will get to see it.
+      s.tapped = fresh && !held && !wasHeld;
     }
   }
 
@@ -417,6 +447,42 @@ export class InputSystem {
   }
 
   /** True while guarding but not deflecting. */
+  /**
+   * Is the player asking to sprint right now?
+   *
+   * On the pad this is **not a button**. Elden Ring has no sprint button: you
+   * tap B to roll and hold B to sprint, and the roll therefore fires on
+   * release rather than on press (see PlayerController.#readIntent). Here that
+   * means sprint is derived — DODGE held past the threshold *is* sprint, and
+   * the same press can no longer also be a roll.
+   *
+   * The keyboard keeps a real SPRINT key as well, so a mouse player can have a
+   * press-instant roll if they want one. Either source counts.
+   */
+  isSprinting() {
+    if (this.actions[ACTION.SPRINT].held) return true;
+    return this.actions[ACTION.DODGE].heldFrames >= TUNING.movement.sprintHoldFrames;
+  }
+
+  /**
+   * A DODGE press that has been released without ever crossing the sprint
+   * threshold — i.e. a tap, and therefore a roll.
+   *
+   * Read on the release edge. A press alone is ambiguous until the player
+   * either lets go or holds long enough, which is exactly the trade the shared
+   * button makes.
+   */
+  isDodgeTap() {
+    const s = this.actions[ACTION.DODGE];
+    // A sub-frame press is unambiguously a tap — it cannot have been held long
+    // enough to sprint — so it fires immediately rather than waiting for a
+    // release edge that will never come. Without this, moving the roll onto
+    // the release edge silently drops fast taps, which is exactly the failure
+    // the `fresh` term in #sampleKbm was added to prevent.
+    if (s.tapped) return true;
+    return s.released && s.releasedAfterFrames < TUNING.movement.sprintHoldFrames;
+  }
+
   isGuarding() {
     return this.actions[ACTION.GUARD].held;
   }

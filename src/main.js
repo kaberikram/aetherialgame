@@ -3,8 +3,6 @@ import { Engine, STAGE } from './core/Engine.js';
 import { GameState } from './core/GameState.js';
 import { EVENTS } from './core/EventBus.js';
 import { Renderer } from './render/Renderer.js';
-import { PostChain } from './render/PostChain.js';
-import { MaterialLibrary } from './render/MaterialLibrary.js';
 import { resolveQuality } from './render/quality.js';
 import { PhysicsWorld } from './physics/PhysicsWorld.js';
 import { InputSystem } from './input/InputSystem.js';
@@ -18,8 +16,8 @@ import { Chapter1, WAYPOINTS } from './level/Chapter1.js';
 import { ZoneManager } from './level/ZoneManager.js';
 import { CheckpointSystem } from './level/Checkpoint.js';
 import { BossEncounter } from './level/BossEncounter.js';
-import { BossBar } from './ui/BossBar.js';
 import { VoidSequence } from './narrative/VoidSequence.js';
+import { BEAT } from './narrative/Beats.js';
 import { Pigeon } from './companion/Pigeon.js';
 import { AudioSystem } from './audio/AudioSystem.js';
 import { HUD } from './ui/HUD.js';
@@ -28,7 +26,9 @@ import { DebugSystem } from './debug/DebugSystem.js';
 import { StatsOverlay } from './debug/StatsOverlay.js';
 import { StateInspector } from './debug/StateInspector.js';
 import { GamepadOverlay } from './debug/GamepadOverlay.js';
+import { ColliderView } from './debug/ColliderView.js';
 import { CombatInspector } from './debug/CombatInspector.js';
+import { FreeCam } from './debug/FreeCam.js';
 import { TUNING } from './tuning.js';
 
 const boot = {
@@ -53,7 +53,7 @@ const boot = {
 };
 
 async function main() {
-  boot.step(6, 'renderer');
+  boot.step(8, 'renderer');
   const engine = new Engine({ fixedHz: 60, maxSubSteps: 5 });
   window.__VESSEL = engine;
 
@@ -65,40 +65,31 @@ async function main() {
   const renderer = engine.provide('renderer', new Renderer(viewport, quality));
   renderer.attach(engine);
 
-  boot.step(11, 'post chain');
-  const post = engine.provide('post', new PostChain(engine, quality));
-  if (post.enabled) renderer.composer = post;
-
-  boot.step(15, 'surfaces');
-  const materials = engine.provide('materials', new MaterialLibrary(quality));
-
   const debug = engine.provide('debug', new DebugSystem(engine, document.getElementById('debug-root')));
 
-  boot.step(20, 'physics');
+  boot.step(22, 'physics');
   const physics = engine.provide('physics', await PhysicsWorld.create(engine));
 
-  boot.step(34, 'input');
+  boot.step(38, 'input');
   const input = engine.provide('input', new InputSystem(engine, renderer.renderer.domElement));
 
-  boot.step(62, 'body');
+  boot.step(58, 'body');
   const player = engine.provide('player', new PlayerController(engine));
   const cameraRig = engine.provide('camera', new CameraRig(engine, player));
   const lockOn = engine.provide('lockOn', new LockOn(engine, player));
 
-  boot.step(74, 'combat');
+  boot.step(66, 'combat');
   const hitboxes = engine.provide('hitboxes', new HitboxSystem(engine));
   const damage = engine.provide('damage', new DamageSystem(engine));
   player.attachCombat({ hitboxes, damage, lockOn });
-  const alignment = engine.provide('alignment', player.attachAlignment());
+  engine.provide('alignment', player.attachAlignment());
   // No weapon at the start. It is found in the mud beside a dead warrior at
   // beat 5, and combat is genuinely unavailable until then.
 
-  // The chapter needs the player and combat services, so it is constructed
-  // after them and before the encounter that sits inside it.
-  boot.step(78, 'world');
+  // The chapter needs the player, so it is constructed after it and before the
+  // encounter that sits inside it.
+  boot.step(72, 'world');
   const chapter = engine.provide('chapter', new Chapter1(engine)).build();
-
-  const dummies = [];
 
   boot.step(80, 'the pool');
   const encounter = engine.provide('encounter', new BossEncounter(engine, {
@@ -106,13 +97,24 @@ async function main() {
     radius: 15,
   }));
 
+  // Two posts beside the sword, so the first thing the chapter offers after
+  // beat 5 is something to hit. Combat feel is unjudgeable against nothing.
+  const dummies = [
+    new TrainingDummy(engine, WAYPOINTS.sword.clone().add(new THREE.Vector3(-3.4, 0, -2.6))),
+    new TrainingDummy(engine, WAYPOINTS.sword.clone().add(new THREE.Vector3(2.8, 0, -4.2))),
+  ];
+  for (const d of dummies) {
+    d.register(hitboxes, lockOn);
+    engine.add(d, STAGE.COMBAT + 5);
+  }
+
   const checkpoints = engine.provide('checkpoints', new CheckpointSystem(engine, player));
   checkpoints.add({ id: 'descent', position: WAYPOINTS.descentBottom.clone().setY(-13.6), facing: Math.PI });
   checkpoints.add({ id: 'greenVein', position: new THREE.Vector3(0, -18.9, -34), facing: Math.PI });
   checkpoints.add({ id: 'poolEdge', position: WAYPOINTS.poolApproach.clone().setY(-22.2), facing: Math.PI });
 
   const zones = engine.provide('zones', new ZoneManager(engine));
-  zones.post = post; // the grade rides the zone crossfade
+  chapter.registerZoneGroups(zones);
   const bounds = (minX, minY, minZ, maxX, maxY, maxZ) => ({
     min: new THREE.Vector3(minX, minY, minZ), max: new THREE.Vector3(maxX, maxY, maxZ),
   });
@@ -122,7 +124,21 @@ async function main() {
   zones.register('pagodaWell', bounds(-40, -34, -150, 40, 40, -98));
   zones.snapTo('void');
 
-  boot.step(82, 'the companion');
+  // The arena's per-frame work is chamber-local. It used to run from every
+  // zone in the chapter, rewriting the pool's vertex buffer while the player
+  // was a hundred metres away in the Descent.
+  let sawPool = false;
+  engine.bus.on(EVENTS.ZONE_ENTERED, ({ id }) => {
+    encounter.setArenaActive(id === 'starChamber');
+    // Beat 4 — the still pool, seen from the steps. Fires the first time the
+    // player is in the room, which is the moment the beat describes.
+    if (id === 'starChamber' && !sawPool) {
+      sawPool = true;
+      engine.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.STILL_POOL });
+    }
+  });
+
+  boot.step(84, 'the companion');
   const pigeon = engine.provide('pigeon', new Pigeon(engine, { player, chapter }));
   pigeon.setPath([
     WAYPOINTS.embodiment, WAYPOINTS.descentTop, WAYPOINTS.descentBottom,
@@ -132,8 +148,8 @@ async function main() {
   // Tell #2 needs to know where the star's light pools.
   pigeon.setStarRepulsor(encounter.arena.starGroup.position);
 
-  boot.step(86, 'sound');
-  const audio = engine.provide('audio', new AudioSystem(engine));
+  boot.step(88, 'sound');
+  engine.provide('audio', new AudioSystem(engine));
 
   const hud = new HUD(engine, player);
 
@@ -143,7 +159,7 @@ async function main() {
     if (e.victim === player) player.onDamaged(e);
   });
 
-  boot.step(84, 'the void');
+  boot.step(90, 'the void');
   const intro = new VoidSequence(engine, player, cameraRig).build();
   intro.landingPosition = WAYPOINTS.embodiment.clone();
   intro.landingFacing = Math.PI;
@@ -153,22 +169,30 @@ async function main() {
     cameraRig.snap({ yaw: intro.landingFacing + Math.PI });
     zones.snapTo('descent');
     hud.setBarsVisible(true);
+    engine.bus.emit(EVENTS.BEAT_ENTERED, { id: BEAT.DESCENT });
     bakeShadows();
   };
 
-  // Every occluder that matters in this chapter is static stonework, so the
-  // shadow maps are identical on frame two as on frame one. Baking them once
-  // removes the star's six-face shadow cube and the sun's directional pass
-  // from every subsequent frame — six of the ten scene passes the Star
-  // Chamber was paying for. `ultra` keeps them live.
+  // Beat 8 fires when the wings resolve. `onWingsResolved` was assigned by
+  // nothing before, so the chapter's own ending had no listener.
+  encounter.onWingsResolved = (variant) => {
+    engine.bus.emit(EVENTS.DIALOGUE_LINE, {
+      speaker: 'the pigeon', text: 'Seven trials remain.', duration: 4.5,
+    });
+    void variant;
+  };
+
+  // One directional shadow map, rendered once and then frozen. Every occluder
+  // in this chapter is static blockout, so the map is identical on frame two.
   //
-  // Timing matters and is easy to get wrong: `intro.start()` hides the entire
-  // chapter group for the duration of the void, so baking at boot would bake
-  // six empty cube faces and freeze them that way. It has to happen once the
-  // world is visible, which is exactly when the intro hands over.
+  // Timing matters and is easy to get wrong: `intro.start()` hides the whole
+  // chapter group for the duration of the void, so baking at boot bakes an
+  // empty map and freezes it that way. That is precisely how the old
+  // volumetric occlusion bake ended up sampling a blank texture for the entire
+  // run — the shadow bake got the ordering right and the one beside it did not.
   let shadowsBaked = false;
   function bakeShadows() {
-    if (shadowsBaked || quality.liveShadows) return;
+    if (shadowsBaked || quality.shadows === false) return;
     shadowsBaked = true;
     renderer.freezeShadows();
   }
@@ -187,21 +211,24 @@ async function main() {
   engine.add(zones, STAGE.WORLD - 5);
   engine.add(encounter, STAGE.AI + 10);
   engine.add(checkpoints, STAGE.WORLD);
-  engine.add(audio, STAGE.AUDIO);
+  engine.add(engine.resolve('audio'), STAGE.AUDIO);
   engine.add(hud, STAGE.UI);
-  engine.add(new BossBar(engine), STAGE.UI);
   engine.add(new PauseMenu(engine), STAGE.UI + 5);
   engine.add(new StatsOverlay(engine, debug), STAGE.DEBUG);
   engine.add(new StateInspector(engine, debug, player, lockOn), STAGE.DEBUG);
   engine.add(new GamepadOverlay(engine, debug, input, player), STAGE.DEBUG);
+  engine.add(new ColliderView(engine, debug), STAGE.DEBUG);
   engine.add(new CombatInspector(engine, debug, player, dummies), STAGE.DEBUG);
+  // After the camera rig, so entering freecam overwrites the rig's transform
+  // for the frame rather than being overwritten by it.
+  engine.add(new FreeCam(engine, debug), STAGE.DEBUG + 5);
 
   // Debug keys that need gameplay references. The intro skip lives on
   // backtick, NOT Escape — Escape is the most natural key for a confused
   // player (and the browser's pointer-lock release), and having it silently
   // skip the opening is how the first playtest teleported past beat 1.
   window.addEventListener('keydown', (e) => {
-    if (e.key === '\`' && !intro.finished) intro.skip();
+    if (e.key === '`' && !intro.finished) intro.skip();
     if (e.key === '0') TUNING.debug.invulnerable = !TUNING.debug.invulnerable;
     if (e.key === '-') player.vitals.applyDamage(9999, 0, 'debug') && player.die();
     if (e.key === '=') player.refillFlask();
@@ -231,10 +258,12 @@ async function main() {
     intro.start(chapter.group);
   }
 
-  boot.step(92, 'daylight');
-  chapter.bakeVolumetrics();
+  // The ink pass, once, after every zone AND the arena exist. Merging per zone
+  // rather than per mesh is what keeps the line work to four draw calls.
+  boot.step(94, 'ink');
+  chapter.bakeInk();
 
-  boot.step(94, 'first frame');
+  boot.step(96, 'first frame');
   renderer.render();
   engine.add(renderer, STAGE.RENDER);
 
@@ -262,9 +291,19 @@ async function main() {
   // auditing the real thing.
   window.__VESSEL_WAYPOINTS = WAYPOINTS;
   window.__VESSEL_API = {
-    engine, player, intro, lockOn, cameraRig, checkpoints, hitboxes, damage, state, chapter, zones,
-    encounter, boss: encounter.boss, arena: encounter.arena, alignment, pigeon, STATE,
-    renderer, post, materials, quality, audio,
+    engine, player, intro, cameraRig, checkpoints, state, chapter, zones,
+    encounter, boss: encounter.boss, arena: encounter.arena, dummies,
+    lockOn, hitboxes, damage,
+    alignment: engine.resolve('alignment'), pigeon, STATE,
+    renderer, quality, audio: engine.resolve('audio'), debug,
+    // The tools need to build Vectors and Raycasters inside the page. Exposing
+    // the module rather than re-importing it in every harness keeps them
+    // pinned to the same three.js the game is running.
+    THREE,
+    // The audits measure the capsule against the level. Handing them the live
+    // table means a tuning edit cannot silently leave a harness measuring a
+    // body the game stopped having.
+    TUNING,
   };
 }
 

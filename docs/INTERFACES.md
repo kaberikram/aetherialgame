@@ -59,13 +59,17 @@ Resolved by name via `engine.resolve(name)`. Registered once at boot in `src/mai
 
 **Renderer** — owns the `WebGLRenderer`, the scene root, the active camera, colour management, tone mapping, shadow config, resize. Exposes `scene`, `camera`, `renderer`, `composer`, `setCamera`, `resize`. Forbidden: gameplay knowledge. It draws what it is given.
 
-ACES tone mapping and sRGB output are configured here **and nowhere else**. Every material authors colour in sRGB and is lit in linear.
+sRGB output is configured here **and nowhere else**, and tone mapping is off: a filmic curve smears the bands cel shading exists to produce. Every material authors colour in sRGB and is lit in linear.
 
-**PostChain** (P7) — owns the `EffectComposer` and pass ordering: SSAO → volumetrics → bloom → per-zone LUT → FXAA → vignette. Exposes `setZoneGrade(id)`, `setEnabled`. Forbidden: creating scene content.
+**npr/ToonMaterial** — owns the one surface shader in the game: a banded gradient ramp plus an injected Fresnel rim. Exposes `toonMaterial(opts)` and `toonRamp(bands)`, both cached. Forbidden: adding anything to the scene, and — permanently — reintroducing any PBR term.
 
-**materials/** (P7) — owns the painterly material patch, water, star, wings, emissives. Exposes factory functions returning configured materials. Forbidden: adding anything to the scene.
+**npr/InkEdges** — owns the line work. `buildInkEdges(meshes)` merges world-space `EdgesGeometry` into one `LineSegments`. Forbidden: knowing which zone it is drawing.
 
-**procedural/** (P7) — owns noise and canvas-based texture generation. Pure functions in, `THREE.Texture` out. Forbidden: any dependency on scene, camera or gameplay.
+**npr/Glow** — owns banded emissive sprites, for the three things that must read as *emitting* rather than as lit: the wisp, the star, the wing forms.
+
+**adaptive** — owns the live pixel ratio. Judged on p95 frame time, with hysteresis, under the ceiling the quality preset sets. Forbidden: touching anything but `setPixelRatio`.
+
+There is **no post-processing chain**, and adding one back is a decision that has to go through DECISIONS.md.
 
 ---
 
@@ -123,11 +127,13 @@ ACES tone mapping and sRGB output are configured here **and nowhere else**. Ever
 
 ## `level/`
 
-**ZoneManager** — owns zone activation, per-zone lighting/grade/audio profiles, streaming boundaries. Emits `ZONE_ENTERED`/`ZONE_EXITED`. Forbidden: owning gameplay entities that outlive a zone.
+**ZoneManager** — owns zone activation, per-zone atmosphere profiles, the chapter's three lights (key, fill, hemisphere ambient), and zone visibility gating. Emits `ZONE_ENTERED`/`ZONE_EXITED`. Forbidden: owning gameplay entities that outlive a zone.
+
+The lights live here rather than in the zones for the same reason the profiles do: eight zone-authored point lights is how the scene ended up with twenty-five of them and a 25-iteration light loop on every fragment in the game.
 
 **zones/** — each zone owns its own geometry, lights, props, colliders and teardown. Zones **never** reference each other. This is what makes the Phase 7 art fan-out safe.
 
-**geometry/** — owns procedural builders: candi and stupa stonework, banyan roots, kala faces, naga balustrades. Pure functions in, `BufferGeometry` out. Forbidden: scene, lighting, materials.
+**ZoneBuilder** — owns the construction context. `box()` and `ramp()` register **analytic cuboid** colliders and are the blockout primitives; `solid()` registers a trimesh and is the exception, for genuinely curved walkable surfaces only. A zone reaching for `solid()` by default is the bug this API exists to prevent — see DECISIONS D55.
 
 **Water** — owns the water surface, depth query and the displacement written on boss breach. Exposes `depthAt(x, z)`, which movement reads to scale speed and dodge distance.
 

@@ -42,7 +42,10 @@ const flag = (n, d) => {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : d;
 };
 const PORT = Number(flag('port', 5341));
-const LEVELS = flag('quality', null) ? [flag('quality')] : ['ultra', 'high'];
+// `ultra` is gone with the post chain it existed to hold. The ladder is now
+// three levers — pixel ratio, shadows, ink — so the comparison worth printing
+// is the shipping default against the cheapest thing that still draws.
+const LEVELS = flag('quality', null) ? [flag('quality')] : ['high', 'low'];
 const ONLY = flag('only', null);
 
 /**
@@ -131,8 +134,8 @@ async function measure(browser, level) {
 
   const quality = await page.evaluate(() => {
     const q = window.__VESSEL_API.quality;
-    return { name: q.name, pixelRatioCap: q.pixelRatioCap, ao: q.ao, aoScale: q.aoScale,
-      liveShadows: q.liveShadows, refractWater: q.refractWater, volumetricSteps: q.volumetricSteps };
+    return { name: q.name, pixelRatioCap: q.pixelRatioCap, shadows: q.shadows,
+      shadowMap: q.shadowMap, outlines: q.outlines, adaptive: q.adaptive };
   });
 
   await page.close();
@@ -159,9 +162,9 @@ async function main() {
 
     for (const r of results) {
       const q = r.quality;
-      console.log(`── ${r.level} ──  dprCap ${q.pixelRatioCap} · ao ${q.ao ? `×${q.aoScale ?? 1}` : 'off'} · `
-        + `shadows ${q.liveShadows ? 'live' : 'baked'} · refract ${q.refractWater ? 'on' : 'off'} · `
-        + `vol ${q.volumetricSteps} steps`);
+      console.log(`── ${r.level} ──  dprCap ${q.pixelRatioCap} · `
+        + `shadows ${q.shadows ? `baked ${q.shadowMap}` : 'off'} · `
+        + `ink ${q.outlines ? 'on' : 'off'} · adaptive ${q.adaptive ? 'on' : 'off'}`);
       console.log('   zone            passes   draws    tris     px/frame');
       for (const row of r.rows) {
         console.log(`   ${row.zone.padEnd(15)} ${String(row.scenePasses).padStart(5)}`
@@ -177,7 +180,7 @@ async function main() {
 
     if (results.length === 2) {
       const [before, after] = results;
-      console.log('── before → after ──  (ultra is byte-for-byte the old `high`)');
+      console.log(`── ${before.level} → ${after.level} ──  what the quality lever actually buys`);
       console.log('   zone            passes            fill (passes × px)');
       for (const a of after.rows) {
         const b = before.rows.find((x) => x.zone === a.zone);

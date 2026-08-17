@@ -1,30 +1,41 @@
 import { EVENTS } from '../core/EventBus.js';
 import { TUNING } from '../tuning.js';
 
+/**
+ * These two tables are what the PLAYER is told the controls are, so they are
+ * the one place a wrong binding is not a bug the player can debug around. They
+ * mirror DEFAULT_KBM_BINDINGS / DEFAULT_GAMEPAD_BINDINGS in input/Actions.js;
+ * change one and change the other.
+ */
 const KBM_CONTROLS = [
   ['wasd', 'move  ·  hold alt to creep'],
   ['mouse', 'camera  —  click the game once to capture it'],
-  ['space', 'dodge / roll  (direction from wasd at the press)'],
-  ['shift', 'sprint'],
+  ['space', 'tap: dodge / roll  ·  hold: sprint'],
+  ['shift', 'sprint  (the alternative, if you would rather tap-roll instantly)'],
   ['f', 'jump  ·  with wings: take off, hold to climb'],
-  ['left / right click', 'light / heavy attack'],
+  ['c', 'crouch / stand'],
+  ['left / right click', 'attack / strong attack'],
   ['q  (hold)', 'guard  —  a fresh tap as a hit lands deflects'],
+  ['v', 'skill'],
   ['r', 'flask'],
   ['e', 'interact'],
   ['tab', 'lock on / release'],
-  ['c', 'alignment ability'],
+  ['x', 'alignment ability'],
   ['esc', 'pause'],
 ];
 
+/** The Elden Ring layout. Not "inspired by" — the same buttons. */
 const PAD_CONTROLS = [
-  ['left stick', 'move'],
-  ['right stick', 'camera  ·  click: lock on'],
-  ['A', 'jump / interact  ·  with wings: fly'],
-  ['B', 'dodge / roll / backstep'],
+  ['left stick', 'move  ·  click: crouch / stand'],
+  ['right stick', 'camera  ·  click: lock on / reset'],
+  ['A', 'jump  ·  with wings: fly'],
+  ['B', 'tap: dodge / roll / backstep  ·  hold: sprint'],
   ['X', 'flask'],
-  ['Y / LB', 'alignment ability'],
-  ['RB / RT', 'light / heavy attack'],
-  ['LT', 'guard  —  a hard fast pull deflects'],
+  ['Y', 'interact'],
+  ['RB / RT', 'attack / strong attack'],
+  ['LB', 'guard'],
+  ['LT', 'skill  ·  alignment ability once wings resolve'],
+  ['d-pad', 'cycle item / skill'],
   ['menu', 'pause'],
 ];
 
@@ -71,6 +82,10 @@ export class PauseMenu {
           <div class="pause-row">
             <span class="pause-label">invert look</span>
             <button class="pause-btn pause-wide" data-act="invert">off</button>
+          </div>
+          <div class="pause-row">
+            <span class="pause-label">auto-recenter (mouse)</span>
+            <button class="pause-btn pause-wide" data-act="recenter">off</button>
           </div>
         </div>
         <table class="pause-controls"></table>
@@ -161,6 +176,9 @@ export class PauseMenu {
     this.basePad = TUNING.camera.lookSensitivityGamepad;
     this.sens = saved.sens ?? 1;
     this.invert = saved.invert ?? false;
+    // Off by default: a camera that moves on its own is the right default for
+    // a pad and the wrong one for a mouse. Offered rather than imposed.
+    this.autoRecenter = saved.autoRecenter ?? false;
     this.#applySettings();
   }
 
@@ -169,14 +187,19 @@ export class PauseMenu {
     TUNING.camera.lookSensitivityGamepad = this.basePad * this.sens;
     TUNING.input.kbm.invertY = this.invert;
     TUNING.input.gamepad.invertY = this.invert;
+    if (this.engine.has('camera')) this.engine.resolve('camera').autoRecenterKbm = this.autoRecenter;
 
     const v = this.el.querySelector('[data-val="sens"]');
     if (v) v.textContent = `${Math.round(this.sens * 100)}%`;
     const b = this.el.querySelector('[data-act="invert"]');
     if (b) b.textContent = this.invert ? 'on' : 'off';
+    const r = this.el.querySelector('[data-act="recenter"]');
+    if (r) r.textContent = this.autoRecenter ? 'on' : 'off';
 
     try {
-      localStorage.setItem('vessel.look', JSON.stringify({ sens: this.sens, invert: this.invert }));
+      localStorage.setItem('vessel.look', JSON.stringify({
+        sens: this.sens, invert: this.invert, autoRecenter: this.autoRecenter,
+      }));
     } catch { /* private browsing */ }
   }
 
@@ -184,6 +207,7 @@ export class PauseMenu {
     if (act === 'sens-up') this.sens = Math.min(3, +(this.sens + 0.1).toFixed(2));
     else if (act === 'sens-down') this.sens = Math.max(0.2, +(this.sens - 0.1).toFixed(2));
     else if (act === 'invert') this.invert = !this.invert;
+    else if (act === 'recenter') this.autoRecenter = !this.autoRecenter;
     this.#applySettings();
   }
 
