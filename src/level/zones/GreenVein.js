@@ -45,42 +45,84 @@ function buildCavern(ctx) {
   const m = ctx.materials;
   const floorY = GREEN_VEIN_FLOOR;
 
-  // The walkable slope. See the header: one ramp IS the function here.
-  const width = Math.max(FLOOR_WIDTH(FROM_Z), FLOOR_WIDTH(TO_Z));
-  ctx.ramp(
-    new THREE.Vector3(FLOOR_OFFSET(FROM_Z), floorY(FROM_Z), FROM_Z),
-    new THREE.Vector3(FLOOR_OFFSET(TO_Z), floorY(TO_Z), TO_Z),
-    width, 1.6, m.veinFloor
-  );
+  // The cavern: floor, walls and roof from one declaration of how wide it is.
+  //
+  // This used to be a floor of ONE constant width — `max(FLOOR_WIDTH(2),
+  // FLOOR_WIDTH(−54))` = 23.19 — with walls placed separately at
+  // `FLOOR_WIDTH(zm)/2 + 2`. `FLOOR_WIDTH` peaks at 27 where `sin(z·0.12) = 1`,
+  // which happens at **z ≈ −39.3, inside this zone**, so the wall stood 15.5m
+  // out while the floor stopped at 11.6m. Nearly four metres of open air down
+  // each side of the Green Vein, and the audit could not see it because a
+  // column with no floor was skipped rather than failed.
+  //
+  // `ctx.path` takes the width once. The floor is that wide and the walls stand
+  // on its edge, and there is no second number to disagree with the first.
+  //
+  // The spine stays a straight line in x — a meander would tilt each segment's
+  // plane and pull the surface off `GREEN_VEIN_FLOOR`, which is the one thing
+  // about this zone that is already exact (D57). Only the *width* varies, which
+  // is what the narrowing was ever about.
+  // The mouth flares before the cavern proper: the Descent arrives as a 9m
+  // corridor and this is 23m across at z2, and the join between those two
+  // numbers has to belong to somebody. It belongs here, because this is the
+  // side whose width is changing. `MOUTH_Z` is flat at `GREEN_VEIN_FLOOR(2)`,
+  // which is exactly −14 — the same height the Descent's ramps end at — so the
+  // two meet flush with no step to climb.
+  /** PoolApproach's first step, from its STAIR_W — the same number. */
+  const STAIR_WIDTH = 21;
+  const MOUTH_Z = 5;
+  const MOUTH_WIDTH = 9;
+  const flare = (z) => THREE.MathUtils.clamp((MOUTH_Z - z) / (MOUTH_Z - FROM_Z), 0, 1);
 
-  // Cavern shell: walls and a ceiling stepping down with the floor. Built as
-  // segments so the passage narrows the way the swept tube did (radius 15
-  // tapering to 12.5), without a single triangle of trimesh.
-  const SEGMENTS = 10;
-  for (let i = 0; i < SEGMENTS; i++) {
-    const z0 = FROM_Z + (TO_Z - FROM_Z) * (i / SEGMENTS);
-    const z1 = FROM_Z + (TO_Z - FROM_Z) * ((i + 1) / SEGMENTS);
-    const zm = (z0 + z1) * 0.5;
-    const len = Math.abs(z1 - z0) + 1.0;
-    const half = FLOOR_WIDTH(zm) * 0.5 + 2.0;
-    const base = floorY(zm);
-
-    for (const side of [-1, 1]) {
-      ctx.box(
-        new THREE.Vector3(1.6, 13, len),
-        new THREE.Vector3(FLOOR_OFFSET(zm) + side * (half + 0.8), base + 5.5, zm),
-        m.veinWall
-      );
-    }
-    // Non-casting: see the note in Descent's buildShell. A roofed cave lit by
-    // a single directional key needs the roof to be transparent to it.
-    ctx.box(
-      new THREE.Vector3(half * 2 + 3.2, 1.2, len),
-      new THREE.Vector3(FLOOR_OFFSET(zm), base + 12.6, zm),
-      m.shell,
-      { castShadow: false }
-    );
+  const SEGMENTS = 12;
+  const spine = [
+    new THREE.Vector3(FLOOR_OFFSET(FROM_Z), floorY(FROM_Z), MOUTH_Z),
+    new THREE.Vector3(FLOOR_OFFSET(FROM_Z), floorY(FROM_Z), (MOUTH_Z + FROM_Z) / 2),
+  ];
+  for (let i = 0; i <= SEGMENTS; i++) {
+    const t = i / SEGMENTS;
+    const z = FROM_Z + (TO_Z - FROM_Z) * t;
+    spine.push(new THREE.Vector3(
+      THREE.MathUtils.lerp(FLOOR_OFFSET(FROM_Z), FLOOR_OFFSET(TO_Z), t),
+      floorY(z),
+      z
+    ));
   }
+  // And three metres past its own end, on the same function.
+  //
+  // `PoolApproach` starts its stairs at z−54 and they are 15m wide; this
+  // cavern is 21m wide where it hands over. That left the outer 3m either side
+  // standing on nothing at the seam between the two zones. Carrying the floor
+  // through means the handover happens on top of a floor rather than at the
+  // edge of one.
+  // Narrowing to the stairs' own width and centred on their centreline, so the
+  // handover is a funnel and not a lip. This cavern is 21m across and off to
+  // x+2.2 where it ends; the stairs are 15m across and centred on x0, and the
+  // difference used to be floor on one side of the seam and nothing on the
+  // other.
+  const HANDOVER = 3;
+  spine.push(new THREE.Vector3(0, floorY(TO_Z - HANDOVER), TO_Z - HANDOVER));
+  ctx.path(spine, {
+    width: (z) => {
+      if (z > FROM_Z) return THREE.MathUtils.lerp(MOUTH_WIDTH, FLOOR_WIDTH(FROM_Z), flare(z));
+      if (z < TO_Z) {
+        const t = THREE.MathUtils.clamp((TO_Z - z) / HANDOVER, 0, 1);
+        return THREE.MathUtils.lerp(FLOOR_WIDTH(TO_Z), STAIR_WIDTH, t);
+      }
+      return FLOOR_WIDTH(z);
+    },
+    thickness: 1.6,
+    material: m.veinFloor,
+    wallMaterial: m.veinWall,
+    wallHeight: 13,
+    wallThickness: 1.6,
+    // Non-casting, handled inside `path`: see the note in Descent's buildShell.
+    // A roofed cave lit by a single directional key needs the roof transparent.
+    ceiling: true,
+    ceilingHeight: 12.6,
+    ceilingThickness: 1.2,
+    ceilingMaterial: m.shell,
+  });
 
   buildWater(ctx, floorY);
 

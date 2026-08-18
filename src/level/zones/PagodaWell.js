@@ -72,8 +72,18 @@ export function build(ctx) {
   const shaftMesh = ctx.solid(shaft, m.pagodaShaft, new THREE.Vector3(w.x, w.y + 27, w.z), { noInk: true });
   shaftMesh.castShadow = false; // 20 vertical lines around a shaft is a cage
 
-  // Floor.
-  ctx.box(new THREE.Vector3(64, 1, 64), new THREE.Vector3(w.x, w.y - 0.5, w.z), m.pagodaStone);
+  // Floor — a disc, sized to the shaft rather than to a square.
+  //
+  // This was a 64×64 box. The shaft's inner radius at floor level is 24.2m, so a
+  // ±32m slab left a wide apron of floor OUTSIDE the room with nothing at its
+  // edges, and every metre of that apron's perimeter was somewhere to walk off
+  // the world. Making the floor round means the shaft wall guards its edge all
+  // the way around, which is what a wall around a room is for.
+  //
+  // A trimesh, like the pool basin: flat, so a triangle mesh is exact here and
+  // has none of the seam behaviour that made `ZoneBuilder` prefer boxes.
+  const floorDisc = new THREE.CylinderGeometry(25.5, 25.5, 1, 32);
+  ctx.solid(floorDisc, m.pagodaStone, new THREE.Vector3(w.x, w.y - 0.5, w.z), { noInk: true });
 
   // The moat: one of the few chromatic notes in the chapter, per the board.
   // A flat ring, no refraction, no depth murk.
@@ -222,14 +232,25 @@ function buildApproach(ctx) {
     const zm = (z0 + z1) * 0.5;
     const len = Math.abs(z1 - z0) + 0.8;
     const y = THREE.MathUtils.lerp(-21.5, -23.0, (zm - zA) / (zB - zA));
+    // Inner face at 4.5 — the corridor floor's own edge — not 5.0. The half
+    // metre between the two was floor with nothing under it: too narrow for the
+    // capsule to fall through, but the audit is right that it is a gap, and the
+    // next time somebody widens the floor it stops being too narrow.
     for (const side of [-1, 1]) {
-      ctx.box(new THREE.Vector3(1.2, 8, len), new THREE.Vector3(side * 5.6, y + 3, zm), m.pagodaShaft);
+      ctx.box(new THREE.Vector3(1.2, 8, len), new THREE.Vector3(side * 5.1, y + 3, zm), m.pagodaShaft);
     }
     ctx.box(new THREE.Vector3(12, 1, len), new THREE.Vector3(0, y + 7, zm), m.shell, { castShadow: false });
   }
 
   // The walkable floor of the corridor, stepping down toward the well.
-  for (let i = 0; i < 4; i++) {
+  //
+  // Five steps, not four. At four the last tread sat at y−24.54 against a well
+  // floor at −25: a 0.46m drop, which is 4cm past the 0.42m step offset. You
+  // could walk down into the Pagoda Well and not climb back out, which made the
+  // chapter's last room a one-way pit — and with no fall backstop in this build
+  // that is the definition of a soft-lock. A fifth step lands at −24.82 and the
+  // final drop is 0.18m.
+  for (let i = 0; i < 5; i++) {
     ctx.box(new THREE.Vector3(9, 1, 8), new THREE.Vector3(0, -24.2 - i * 0.28, -100 - i * 7), m.pagodaStone);
   }
 }

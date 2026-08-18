@@ -36,9 +36,14 @@ export function build(ctx) {
   // than starting bright: these are the steps the player is standing on for
   // the chamber's establishing shot, filling the bottom third of frame, and a
   // lit-white plaza in front of an indigo room reads as a different game.
+  // Width comes off one expression, shared with the balustrades below and
+  // matched to the Green Vein's own width where the two meet. The first step
+  // used to be 15m against a 21m cavern mouth, so 3m either side of the seam
+  // was cavern floor ending at nothing.
+  const STAIR_W = (i) => 21 - i * 1.2;
   for (let i = 0; i < 7; i++) {
     ctx.box(
-      new THREE.Vector3(15 - i * 0.5, 1.0, 4.2),
+      new THREE.Vector3(STAIR_W(i), 1.0, 4.2),
       new THREE.Vector3(0, top - drop * i - 0.5, -54 - i * 3.4),
       i < 3 ? m.chamberStep : m.chamberBasin
     );
@@ -51,15 +56,30 @@ export function build(ctx) {
   ctx.box(new THREE.Vector3(2.2, 8, 2.2), new THREE.Vector3(6.5, -19, -56), m.chamberWall);
   ctx.box(new THREE.Vector3(15, 1.6, 2.2), new THREE.Vector3(0, -15.6, -56), m.chamberWall);
 
-  // Balustrades flanking the descent — the stair guardians, as plain rails.
-  for (const s of [-1, 1]) {
-    ctx.box(
-      new THREE.Vector3(0.6, 1.2, 22),
-      new THREE.Vector3(s * 6.6, -20.6, -63),
-      m.chamberStep,
-      { collide: false }
-    );
+  // Balustrades flanking the descent — the stair guardians, and now solid.
+  //
+  // They were `collide: false`, which meant the seven steps down into the
+  // chamber had no edges at all: 12–15m wide, nothing either side, and the
+  // chamber shell beyond them is decoration. Walking off the stairs walked you
+  // out of the chapter.
+  //
+  // They come off the same `15 - i*0.5` expression the steps are cut from, so
+  // the rail stands on the step's edge rather than near it. Only the upper
+  // stretch is railed: below z≈−62 the arena's dais is wider than the stairs
+  // are, so a rail there would divide the room the fight happens in rather than
+  // guard anything.
+  const railSpine = [];
+  for (let i = 0; i <= 3; i++) {
+    railSpine.push(new THREE.Vector3(0, top - drop * i + 0.5, -54 - i * 3.4));
   }
+  ctx.path(railSpine, {
+    floor: false,
+    width: (z) => STAIR_W(Math.max(0, (-54 - z) / 3.4)),
+    material: m.chamberStep,
+    wallMaterial: m.chamberStep,
+    wallHeight: 3,
+    wallThickness: 0.6,
+  });
 
   // The chamber shell. A cylinder plus a cap, both inward-facing, both
   // non-colliding — the player is held in by the arena's containment ring, not
