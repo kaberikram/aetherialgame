@@ -259,13 +259,19 @@ export class StarChamberArena {
     const RAIL_N = 48;
     const railStep = (Math.PI * 2) / RAIL_N;
     const railPanel = RAIL_R * railStep * 1.15;
+    // Angle difference the only way that is right for every pair of angles.
+    //
+    // `d = |a − door|; if (d > π) d = 2π − d` looks like the same thing and is
+    // not: with `door = −π/2` and `a` running 0…2π the raw difference reaches
+    // 7.85, and `2π − 7.85` is NEGATIVE — which is less than any threshold, so
+    // every panel in that range counted as "inside the doorway". A whole
+    // quadrant of the balustrade, from a≈290° to 360°, silently never got built,
+    // and the dais rim there was a cliff into nothing.
+    const angleGap = (a, door) => Math.abs(Math.atan2(Math.sin(a - door), Math.cos(a - door)));
+
     for (let i = 0; i < RAIL_N; i++) {
       const a = i * railStep;
-      const gap = [Math.PI / 2, -Math.PI / 2].some((door) => {
-        let d = Math.abs(a - door);
-        if (d > Math.PI) d = Math.PI * 2 - d;
-        return d < railStep * 2.5;
-      });
+      const gap = [Math.PI / 2, -Math.PI / 2].some((door) => angleGap(a, door) < railStep * 2.5);
       if (gap) continue;
       const panel = this.#railPanel(a, RAIL_R, railPanel, m.chamberStep);
       this.group.add(panel);

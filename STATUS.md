@@ -65,14 +65,48 @@ Hardware-independent, from `node tools/perf.mjs`, against the previous build:
 | draw calls, worst vantage | 821 | **105** |
 | triangles, worst vantage | ~350k | **3.6k** |
 | Green Vein collider vs its own height function | 0.55m | **0.01m** |
-| standable grid samples audited | 0 (centreline only) | **1,737** |
+| standable grid samples audited | 0 (centreline only) | **8,216** |
 | collider-vs-mesh disagreement, whole chapter | unmeasured | **none above 5cm** |
+| edges you can walk off the world from | unmeasured, 416 when first measured | **47** |
 
 Draw calls are 14× inside the 1,500 budget and triangles are ~100× down, so
 neither is the limit any more. **Frame time is still unmeasured on the target
 machine** — this container renders through SwiftShader, so every millisecond it
 reports is a fact about a software rasteriser (D51). `?bench` on the M1 is the
 number that settles the original complaint, and it has not been run.
+
+## Holes — where the level still is not solid
+
+Every route used to state its width twice: once building its floor, again
+building the walls meant to keep you on it, with nothing reconciling the two.
+`ZoneBuilder.path()` now takes the width once and emits both. The Green Vein,
+the pool approach and the pagoda corridor are rebuilt on it; the Star Chamber's
+dais and balustrade are built to the same rule by hand. See DECISIONS D67–D68.
+
+**416 unguarded edges → 47.** What is left, with coordinates, from
+`npm run collision` check 7:
+
+| where | count | what |
+|---|---|---|
+| Descent | 45 | x −9…7.5, z 6…25.5. Its shell walls sit 5.8m off the spine and its floors are 8–9m wide. |
+| Green Vein | 2 | x 11.3–12.0, z −54.7, at the handover to the pool stairs. |
+
+Plus an 8-cell slot (x 0.8–5.3, z 6.8–19.5) where the Descent's two routes
+converge and their walls interleave — check 8 confirms it by driving the real
+controller, so it is real.
+
+**The Descent is the hard one and it is hard for a reason.** It is two stacked
+routes sharing one shell: the main line, and the lower route you land on by
+missing the jump. Converting it to `path()` and every attempt to widen its
+floors to meet its walls pushed the main line's floor slab down onto the crawl
+below and sealed it — `npm run controls`'s crawl case caught each attempt. Doing
+it properly means giving the two routes one shared enclosure sized to their
+union rather than a width each, which is a real piece of work rather than a
+number change.
+
+**There is no fall backstop.** No kill plane, no respawn-on-fall — by choice, so
+the geometry gets trusted. Until the 47 are gone, those are the places that
+choice costs you.
 
 ## What is NOT done
 
@@ -106,13 +140,15 @@ number that settles the original complaint, and it has not been run.
 ```bash
 npm run smoke        # headless boot, zero console errors, perf counters
 npm run controls     # strafe/look, tap-vs-hold dodge, crouch, the crawl
-npm run collision    # ground, continuity, spawns, grid sweep, wedges
+npm run collision    # ground, continuity, spawns, grid sweep, edges, pits, wedges
 npm run playthrough  # plays the chapter void → oculus and checks all 8 beats
 node tools/perf.mjs  # scene passes, draw calls, triangles, pixels per frame
 npm run build        # production build
 ```
 
-All five pass on this build, and `npm run build` succeeds. `tools/rubric.mjs`
+`smoke`, `controls`, `playthrough`, `perf` and `build` all pass.
+**`collision` does not, and that is the honest state of the level** — see
+"Holes" below. `tools/rubric.mjs`
 still runs but has nothing to judge yet — it captured against concept boards, and
 there is no art in frame.
 

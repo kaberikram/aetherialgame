@@ -76,15 +76,23 @@ function buildTunnel(ctx, WAYPOINTS) {
   // --- the main line -----------------------------------------------------
   // R1: out of the doorway and down. Wide and shallow — the first thing the
   // body does after standing up cannot be something it can fail.
+  // 11.6 wide, which is exactly the clear width `buildShell` encloses.
+  //
+  // The shell's walls stand 6.4m off the spine and are 1.2m thick, so their
+  // inner face is at 5.8 — while this ramp's floor was 8m wide, an edge at 4.0.
+  // That is 1.8m of open air down each side of the first thing the player
+  // walks on. Only the segments ABOVE the lower route get this treatment: the
+  // ones further down pass over it, and widening those drops their underside
+  // onto the crawl and seals it. See buildShell.
   ctx.ramp(
     new THREE.Vector3(0, 0.1, 25.5),
     new THREE.Vector3(-3.0, -5.6, 18.6),
-    8, 1.2, m.descentFloor
+    SHELL_WIDTH, 1.2, m.descentFloor
   );
 
   // The jump-off ledge. Short on purpose: standing on it, the gap and the
   // landing beyond are both in frame, and there is nowhere to dither.
-  ctx.box(new THREE.Vector3(8, 1, 1.2), new THREE.Vector3(-3.0, -6.1, 18.0), m.ledge);
+  ctx.box(new THREE.Vector3(SHELL_WIDTH, 1, 1.2), new THREE.Vector3(-3.0, -6.1, 18.0), m.ledge);
 
   // ---- the 2.6m gap: z 17.4 → 14.8 ----
 
@@ -103,8 +111,14 @@ function buildTunnel(ctx, WAYPOINTS) {
     9, 1.2, m.descentFloor
   );
 
-  // The bottom chamber floor. Meets the Green Vein's own ramp at z≈2.
-  ctx.box(new THREE.Vector3(12, 1, 6), new THREE.Vector3(b.x, b.y - 0.5, 3.5), m.descentFloor);
+  // The bottom chamber floor, matched to the Green Vein's mouth.
+  //
+  // It was 12m wide against a cavern mouth that flares to 23m, and the shell's
+  // walls stop at z≈3, so its outer edges stood in open air for the last few
+  // metres before the handover. Widened to the shell's clear width and pulled
+  // back so the Green Vein's own flare — which brings its walls with it — takes
+  // over at z5 rather than meeting a wider slab in mid-air.
+  ctx.box(new THREE.Vector3(SHELL_WIDTH, 1, 5), new THREE.Vector3(b.x, b.y - 0.5, 4.5), m.descentFloor);
 
   // --- the lower route, under the gap ------------------------------------
   ctx.ramp(
@@ -146,10 +160,16 @@ function buildTunnel(ctx, WAYPOINTS) {
     const yaw = Math.atan2(dx, dz);
     const px = dz / len;
     const pz = -dx / len;
+    // The wall's base goes under the segment's LOWEST floor, not its midpoint.
+    // A vertical wall on a sloping floor otherwise leaves its bottom edge above
+    // the floor at the low end by half the segment's fall — a slot under the
+    // railing at exactly the place the wall scrub is pushing the player along it.
+    const base = Math.min(p0.y, p1.y) - 0.6;
+    const cap = mid.y + 3.4;
     for (const side of [-1, 1]) {
       ctx.box(
-        new THREE.Vector3(1.0, 4, len + 1.0),
-        new THREE.Vector3(mid.x + px * side * 4.4, mid.y + 1.4, mid.z + pz * side * 4.4),
+        new THREE.Vector3(1.0, cap - base, len + 1.0),
+        new THREE.Vector3(mid.x + px * side * 4.4, (cap + base) * 0.5, mid.z + pz * side * 4.4),
         m.descentWall,
         { rotation: new THREE.Euler(0, yaw, 0), castShadow: false }
       );
@@ -188,6 +208,9 @@ function buildTunnel(ctx, WAYPOINTS) {
   buildShell(ctx);
   buildCamp(ctx, new THREE.Vector3(-3.0, -5.4, 19.5));
 }
+
+/** The clear width `buildShell` encloses. Floors above the lower route match it. */
+const SHELL_WIDTH = 11.6;
 
 /**
  * Walls and a ceiling around the descent. Non-colliding except the walls,
