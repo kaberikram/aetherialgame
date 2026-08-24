@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { FILTERS } from '../../physics/PhysicsWorld.js';
 import { WAYPOINTS } from '../waypoints.js';
 
+/** The approach corridor's surface where it meets the well floor. */
+const CORRIDOR_END_Y = -25.0;
+/** ...which is also what the candi's entrance steps climb from. */
+const CORRIDOR_AT_PLINTH = CORRIDOR_END_Y;
+
 /**
  * Beat 8 — the Pagoda Well. A sunken candi under an oculus of open sky, and
  * the only daylight in the chapter.
@@ -124,20 +129,22 @@ function buildTower(ctx, w) {
   // against a 0.42m step offset (TUNING.movement), so the capsule bounced off
   // the temple stairs. And they were laid out as a climb of the plinth's full
   // 1.5m — measured from the well floor — when the surface the player actually
-  // arrives on is the approach corridor's floor at y −24.26, which is only
-  // 0.76m below the plinth top. So the top step was buried inside the plinth
+  // arrives on is the approach corridor's floor, which is only ~1.1m below the
+  // plinth top. So the top step was buried inside the plinth
   // and the bottom two were under the corridor, leaving the plinth's +z face
   // standing as a 1.04m ledge across the full width of the corridor: the
   // player walked down the passage and stopped dead at z −116.4.
   //
-  // Three risers over 0.76m is 0.253m each, comfortably inside the offset. The
-  // third riser *is* the plinth, so only two boxes are needed, and they step
+  // The last riser *is* the plinth, so one fewer box than risers, and they step
   // outward from the plinth's face rather than inward from the corridor.
   const PLINTH_TOP = w.y + 1.5;
   const PLINTH_FACE = w.z + (BASE_WIDTH + 4) / 2;
-  const CORRIDOR_Y = -24.26;
-  const rise = (PLINTH_TOP - CORRIDOR_Y) / 3;
-  for (let i = 0; i < 2; i++) {
+  const CORRIDOR_Y = CORRIDOR_AT_PLINTH;
+  // Four risers over the plinth's full 1.5m — 0.375m each, inside the 0.42m
+  // step offset. The corridor now arrives at the well floor rather than part
+  // way up, so the climb is the whole plinth instead of the 0.76m it was.
+  const rise = (PLINTH_TOP - CORRIDOR_Y) / 4;
+  for (let i = 0; i < 3; i++) {
     ctx.box(
       new THREE.Vector3(6, 0.5, 1.4),
       new THREE.Vector3(w.x, PLINTH_TOP - rise * (i + 1) - 0.25, PLINTH_FACE + 0.7 + i * 1.4),
@@ -221,36 +228,40 @@ function buildApproach(ctx) {
   ctx.box(new THREE.Vector3(3.0, 9, 3.0), new THREE.Vector3(gate.x + 4.5, gate.y + 4, gate.z), m.pagodaStone);
   ctx.box(new THREE.Vector3(12, 2, 3.0), new THREE.Vector3(gate.x, gate.y + 9.5, gate.z), m.pagodaStone);
 
-  // The corridor: a box passage, where it used to be a swept tube. Six
-  // segments from the chamber wall to the well, dropping 1.5m over 20m.
-  const SEGMENTS = 6;
-  const zA = -96;
-  const zB = -116;
-  for (let i = 0; i < SEGMENTS; i++) {
-    const z0 = zA + (zB - zA) * (i / SEGMENTS);
-    const z1 = zA + (zB - zA) * ((i + 1) / SEGMENTS);
-    const zm = (z0 + z1) * 0.5;
-    const len = Math.abs(z1 - z0) + 0.8;
-    const y = THREE.MathUtils.lerp(-21.5, -23.0, (zm - zA) / (zB - zA));
-    // Inner face at 4.5 — the corridor floor's own edge — not 5.0. The half
-    // metre between the two was floor with nothing under it: too narrow for the
-    // capsule to fall through, but the audit is right that it is a gap, and the
-    // next time somebody widens the floor it stops being too narrow.
-    for (const side of [-1, 1]) {
-      ctx.box(new THREE.Vector3(1.2, 8, len), new THREE.Vector3(side * 5.1, y + 3, zm), m.pagodaShaft);
-    }
-    ctx.box(new THREE.Vector3(12, 1, len), new THREE.Vector3(0, y + 7, zm), m.shell, { castShadow: false });
-  }
-
-  // The walkable floor of the corridor, stepping down toward the well.
+  // The corridor, as one declaration.
   //
-  // Five steps, not four. At four the last tread sat at y−24.54 against a well
-  // floor at −25: a 0.46m drop, which is 4cm past the 0.42m step offset. You
-  // could walk down into the Pagoda Well and not climb back out, which made the
-  // chapter's last room a one-way pit — and with no fall backstop in this build
-  // that is the definition of a soft-lock. A fifth step lands at −24.82 and the
-  // final drop is 0.18m.
-  for (let i = 0; i < 5; i++) {
-    ctx.box(new THREE.Vector3(9, 1, 8), new THREE.Vector3(0, -24.2 - i * 0.28, -100 - i * 7), m.pagodaStone);
-  }
+  // It used to be three independent loops: walls whose height came off
+  // `lerp(-21.5, -23.0, t)`, a ceiling off the same, and a separate run of
+  // floor boxes stepping −23.7 down to −24.82. Those two families of numbers
+  // were never reconciled, so the walls floated about 1.2m ABOVE the floor they
+  // were guarding for the corridor's whole length — you could walk under the
+  // railing and off the side into the shaft. That was 52 of the chapter's
+  // remaining unguarded edges, all of them here.
+  //
+  // `ctx.path` takes the surface once. The walls stand on it because they are
+  // built from it, and the ramp arrives at −25.0 exactly, which is the well
+  // floor's own height — so the last step into the chapter's final room is not
+  // a step at all.
+  ctx.path([
+    // Starts at z−94, under the Star Chamber's dais rather than 2m short of
+    // it, so dropping off the dais lands on this floor instead of past its end.
+    new THREE.Vector3(0, -23.7, -94),
+    new THREE.Vector3(0, -24.4, -108),
+    // Ends at the well floor's own height, and BEFORE the candi's plinth.
+    // Running on to z−124 buried the last stretch inside the plinth (z−135 to
+    // −117, top −23.5), so the corridor dead-ended in solid rock and the whole
+    // chapter behind it came back as unreachable from the exit.
+    new THREE.Vector3(0, CORRIDOR_END_Y, -116),
+  ], {
+    width: 9,
+    thickness: 1.2,
+    material: m.pagodaStone,
+    wallMaterial: m.pagodaShaft,
+    wallHeight: 8,
+    wallThickness: 1.2,
+    ceiling: true,
+    ceilingHeight: 7,
+    ceilingThickness: 1.0,
+    ceilingMaterial: m.shell,
+  });
 }
