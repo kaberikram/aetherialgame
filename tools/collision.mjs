@@ -23,6 +23,21 @@
  *
  *   node tools/collision.mjs
  *   node tools/collision.mjs --port 5331
+ *
+ * When check 7 or 8 fails, the verdict tells you how many cells and roughly
+ * where; these tell you why:
+ *
+ *   COLLISION_DEBUG=1              the two walks' start nodes, their overlap,
+ *                                  how far forward got, and that frontier
+ *                                  cell's four neighbours — what is there and
+ *                                  what you would land on stepping across.
+ *   COLLISION_WINDOW=x0,x1,z0,z1   every column in that rectangle: its floors,
+ *                                  every level above them, and whether the
+ *                                  forward walk reached it. Needs
+ *                                  COLLISION_DEBUG. This is the one that
+ *                                  answers "what IS that surface" without
+ *                                  another round of arithmetic — the Descent's
+ *                                  rebuild was four of these and no guesses.
  */
 import { chromium } from 'playwright';
 import { spawn, execSync } from 'node:child_process';
@@ -407,7 +422,7 @@ async function main() {
     // Requiring clearance fixes the first, the normal matrix fixes the second,
     // and `userData.noCollide` — which ZoneBuilder now sets at the one place
     // that knows whether a collider was registered — fixes the third.
-    const grid = await page.evaluate(({ zones, WALKABLE_NORMAL_Y, STAND_H, CROUCH_H, GRID_STEP, CAP_R, DROP_WARN, STEP }) => {
+    const grid = await page.evaluate(({ zones, WALKABLE_NORMAL_Y, STAND_H, CROUCH_H, GRID_STEP, CAP_R, DROP_WARN, STEP, WINDOW }) => {
       const api = window.__VESSEL_API;
       const ph = api.engine.resolve('physics');
       const THREE = api.THREE;
@@ -728,6 +743,46 @@ async function main() {
         fwdHasBackStart: startBack ? reachable.has(nodeKey(startBack.k, startBack.y)) : null,
         backHasFwdStart: startFwd ? canExit.has(nodeKey(startFwd.k, startFwd.y)) : null,
         overlap: [...reachable].filter((n) => canExit.has(n)).length,
+        // Where the forward walk ran out. When the two walks come back
+        // disjoint the useful question is not "how many" but "how far" — the
+        // frontier names the segment of level that stopped it.
+        frontier: (() => {
+          let lo = Infinity;
+          let hi = -Infinity;
+          let at = null;
+          for (const node of reachable) {
+            const c = cells.get(node.split('@')[0]);
+            if (!c) continue;
+            if (c.z > hi) hi = c.z;
+            if (c.z < lo) { lo = c.z; at = node; }
+          }
+          if (!at) return { z: [lo, hi], count: reachable.size };
+          // The frontier cell's neighbours, on the same terms the walk saw
+          // them: what is there, and what you would land on stepping across.
+          const [fk, fy] = at.split('@');
+          const [fix, fiz] = fk.split(',').map(Number);
+          const nb = DIRS.map(([dx, dz]) => {
+            const c = cells.get(key(fix + dx, fiz + dz));
+            return {
+              d: `${dx},${dz}`,
+              levels: c ? c.levels.map((v) => +v.toFixed(2)) : null,
+              land: c ? landing(c, Number(fy)) : null,
+            };
+          });
+          const win = WINDOW
+            ? (() => {
+              const [x0, x1, z0, z1] = WINDOW;
+              const rows = [];
+              for (const [k, c] of cells) {
+                if (c.x < x0 || c.x > x1 || c.z < z0 || c.z > z1) continue;
+                rows.push(`x${c.x.toFixed(2)} z${c.z.toFixed(2)} y${c.levels.map((v) => v.toFixed(2)).join('/')}`
+                  + ` ${c.levels.some((l) => reachable.has(nodeKey(k, l))) ? 'R' : '-'}`);
+              }
+              return rows;
+            })()
+            : undefined;
+          return { z: [lo, hi], deepest: at, count: reachable.size, nb, win };
+        })(),
       };
 
       // ---- check 8: pits -------------------------------------------------
@@ -844,6 +899,8 @@ async function main() {
     }, {
       zones: GRID_ZONES, WALKABLE_NORMAL_Y, STAND_H: STAND_HEIGHT, CROUCH_H: CROUCH_HEIGHT,
       GRID_STEP, CAP_R: CAPSULE_RADIUS, DROP_WARN, STEP: STEP_OFFSET,
+      WINDOW: process.env.COLLISION_WINDOW
+        ? process.env.COLLISION_WINDOW.split(',').map(Number) : null,
     });
 
     console.log('\n──── 5. grid sweep (standable ground, collider vs visual) ────');

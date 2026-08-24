@@ -75,53 +75,47 @@ machine** — this container renders through SwiftShader, so every millisecond i
 reports is a fact about a software rasteriser (D51). `?bench` on the M1 is the
 number that settles the original complaint, and it has not been run.
 
-## Holes — where the level still is not solid
+## The level is solid
 
 Every route used to state its width twice: once building its floor, again
 building the walls meant to keep you on it, with nothing reconciling the two.
 `ZoneBuilder.path()` now takes the width once and emits both. The Green Vein,
-the pool approach and the pagoda corridor are rebuilt on it; the Star Chamber's
-dais and balustrade are built to the same rule by hand. See DECISIONS D67–D68.
+the pool approach, the pagoda corridor and the Descent are all on it; the Star
+Chamber's dais and balustrade are built to the same rule by hand. See DECISIONS
+D67–D70.
 
-**416 unguarded edges → 47.** What is left, with coordinates, from
-`npm run collision` check 7:
+**416 unguarded edges → 0.** `npm run collision` exits 0: nothing to walk off,
+nowhere you can get into and not out of, no wedges, every collider where its
+mesh is drawn.
 
-| where | count | what |
-|---|---|---|
-| Descent | 45 | x −9…6.8, z 6…25.5. Its shell walls sit 5.8m off the spine; the floors that pass over the lower route cannot be widened to match without sealing the crawl. |
-| Green Vein | 2 | x 11.3–12.0, z −54.7, at the handover to the pool stairs. |
+The Descent was the last and hardest, because it is two stacked routes in one
+cavern — the main line, and the lower route you land on by missing the jump.
+Three things settled it, all in `src/level/zones/Descent.js`:
 
-Plus an 8-cell slot (x 0.8–5.3, z 6.8–19.5) where the Descent's two routes
-converge and their walls interleave — check 8 confirms it by driving the real
-controller, so it is real.
+- **One dead-straight centreline.** Every node sits on x0. A `ramp` is a rotated
+  box whose width axis stays horizontal, so a wide slab on a diagonal throws a
+  fin out sideways that reaches metres along z — that fin is what sealed the
+  crawl every time a floor was widened, and what left the entry ramp's slanted
+  end short of the jump-off ledge's square one. Axis-aligned, a box's fin is the
+  box.
+- **One enclosure, based on the lowest floor.** Walls come off a single `path`
+  given the *lower* route's heights, so they run unbroken from the bottom floor
+  to the ceiling and guard both routes at once. Neither route carries walls of
+  its own; the main line is a ledge over the lower one, and its edge is a drop
+  onto floor rather than a hole.
+- **The merge is sideways.** Two surfaces that end in the same place converge,
+  and you cannot climb onto a floor you are underneath. So the cavern widens
+  from 11.6m to 19m below z11 and the two routes meet in the strips beside the
+  ramp, where nothing is overhead.
 
-**The Descent is the hard one and it is hard for a reason.** It is two stacked
-routes sharing one shell: the main line, and the lower route you land on by
-missing the jump. A `ramp` hangs its thickness BELOW its surface, so widening a
-floor that passes over another one drags a slab across the corridor beneath —
-and because a ramp is a rotated box, widening also spreads its footprint along
-its own axis, so a corner reaches back over the crawl and its extrapolated plane
-sits 0.6m above the route below. Both were found by the headroom profile
-(`COLLISION_DEBUG=1 npm run collision`), which is now the tool for this corner
-of the level and is worth reaching for before touching any of its numbers.
+**There is no fall backstop** — no kill plane, no respawn-on-fall, by choice, so
+the geometry gets trusted. It now earns that.
 
-What is in: the segments above the lower route are widened to the shell's clear
-width, the one passing over it is thinned to 0.35m so its underside clears, and
-the crawl's pinch is owned by one slab that exists to be a pinch. The lower
-route is now crouch-passable end to end — `controls` reports the crouched
-capsule reaching z3.65 where it used to stop at z7.66.
-
-What is not: the last 45 edges need floors and walls off ONE spine and width,
-and neither can move to meet the other — moving the floor re-seals the crawl
-(the ramp's start sets its slope), and moving the spine takes the walls off the
-ledges. Joint overlaps were tried and reverted: they closed wedges but collapsed
-the audit's reachable set from 7,807 cells to 635, and an improvement that
-cannot be measured is not one. The real fix is one enclosure sized to both
-routes' union rather than a spine and a width each — a rewrite, not a number.
-
-**There is no fall backstop.** No kill plane, no respawn-on-fall — by choice, so
-the geometry gets trusted. Until the 47 are gone, those are the places that
-choice costs you.
+When check 7 or 8 does go red again, `COLLISION_DEBUG=1` prints the forward
+walk's frontier and that cell's neighbours, and `COLLISION_WINDOW=x0,x1,z0,z1`
+dumps every column in a rectangle with its levels and whether the walk reached
+it. The Descent's rebuild was four of those and no guesses; it is much faster
+than reasoning about the geometry.
 
 ## What is NOT done
 
@@ -161,11 +155,8 @@ node tools/perf.mjs  # scene passes, draw calls, triangles, pixels per frame
 npm run build        # production build
 ```
 
-`smoke`, `controls`, `playthrough`, `perf` and `build` all pass.
-**`collision` does not, and that is the honest state of the level** — see
-"Holes" below. `tools/rubric.mjs`
-still runs but has nothing to judge yet — it captured against concept boards, and
-there is no art in frame.
+All six pass. `tools/rubric.mjs` still runs but has nothing to judge yet — it
+captures against concept boards, and there is no art in frame.
 
 **`npm run playthrough` is the one that matters most**, because it is the only
 one that plays the game. It found six bugs nothing else could have: a beat with

@@ -697,3 +697,67 @@ Two smaller lessons worth keeping:
   every pair.
 
   416 unguarded edges → 47.
+
+### D69. A fin is a rotated box's revenge, so the Descent runs straight
+
+`ZoneBuilder.ramp` orients its slab with Euler order `YXZ`: local +Z lands on
+the 3D heading, local +Y is the surface normal, and local +X — the width axis —
+stays **horizontal**. Widening a ramp therefore throws a flat fin out sideways
+*at the height of its own endpoint*. On a segment that runs diagonally in plan,
+that fin reaches backwards along z: the Descent's old last segment, at width 9
+on a heading of x 2.5 → 0, put a corner at **z ≈ 10.8, y = −11.6** with the
+lower route at −12.4 beneath it. Four tenths of a metre of clearance, and the
+crouched player only got through by squeezing round it at x ≈ −4.
+
+This is why three separate attempts to widen the Descent's floors out to its
+walls all sealed the crawl, and why each one was reverted as inexplicable. It
+was never the width; it was the width times the heading. The same effect at the
+top of the zone left the entry ramp's *slanted* end short of the jump-off
+ledge's *square* one, opening fifteen cells of corridor whose floor simply
+stopped.
+
+Every node in the zone now sits on x0. An axis-aligned box's fin is the box.
+The plan-view wiggle was never worth what it cost — the Descent's interest is
+vertical (a ledge, a gap, a route underneath, a crawl) and none of that wanted
+a bend.
+
+### D70. Stacked routes merge sideways, or they do not merge
+
+Two surfaces that end in the same place converge, and the space between them
+goes standing height, then crouching height, then nothing. You cannot climb
+onto a floor you are standing underneath, and no thickness, slope or width
+changes that — it is what "they end in the same place" means.
+
+So the Descent's cavern opens from 11.6m to 19m below z11 while the main line's
+floor stays 11.6m, and the two routes meet in the strips beside the ramp where
+nothing is overhead. The main line becomes a ledge for its lower half, which is
+correct: its edge is a two-metre drop onto the lower route, and the lower route
+is where you already are if you missed the jump.
+
+Getting the last metre of this right was a two-centimetre problem. `path`
+closes a width change with a shoulder wall, and the shoulder first went on
+`CHAMBER` — the node where the main ramp lands. That walled the strip off 1.2m
+before the surfaces met, at a point where the strip is still 0.44m below the
+ramp against a 0.42m step offset. Everyone who missed the jump was stuck at the
+bottom of the zone, and check 8 could not see it because check 8 asks whether
+you can leave, not whether you can arrive. Moving the shoulder past the merge
+(`WIDEN_TO_Z`) is the whole fix.
+
+### D71. The audit had to say what a surface IS
+
+Check 7 and check 8 report how many cells and roughly where. That was enough
+while the defects were whole missing walls, and useless once they were single
+surfaces at unexpected heights: "45 cells, floor at y −7.0" is a number you can
+stare at for an hour.
+
+Two switches now answer it directly. `COLLISION_DEBUG=1` prints the forward
+walk's frontier — how far it got, and that cell's four neighbours with their
+levels and what you would land on stepping across. `COLLISION_WINDOW=x0,x1,z0,z1`
+dumps every column in a rectangle: its floors, every level above them, and
+whether the walk reached it.
+
+The frontier dump found the real cause of the Descent's collapse in one run —
+the forward walk was reaching z 6.0 and stopping, which is nowhere near the
+cluster the edge report named. The window dump identified every remaining
+surface without a line of arithmetic. Four runs, no guesses; the three previous
+attempts at this zone were arithmetic and all three were wrong.

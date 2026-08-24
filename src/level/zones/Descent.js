@@ -9,7 +9,7 @@ import * as THREE from 'three';
 export function build(ctx, WAYPOINTS) {
   ctx.zone('descent');
   buildEmbodimentLedge(ctx, WAYPOINTS);
-  buildTunnel(ctx, WAYPOINTS);
+  buildTunnel(ctx);
   return {};
 }
 
@@ -42,192 +42,208 @@ function buildEmbodimentLedge(ctx, WAYPOINTS) {
   ctx.box(new THREE.Vector3(16, 1, 18), new THREE.Vector3(p.x, p.y + 7.5, p.z), m.shell);
 }
 
+// ---------------------------------------------------------------------------
+// The cavern
+// ---------------------------------------------------------------------------
+
+/** Clear width of the cavern where it holds one route. */
+const CLEAR_WIDTH = 11.6;
+
+/**
+ * Clear width where it holds two.
+ *
+ * Below `WIDEN_FROM_Z` the main line's ramp and the lower route are stacked
+ * within a couple of metres of each other, and the space between them closes
+ * to nothing by the time both reach the floor. The way out of a closing space
+ * is sideways, so the cavern opens here and the main line does not: its floor
+ * stays `CLEAR_WIDTH`, which leaves a standing-height strip down each side
+ * that is under the ceiling rather than under the ramp.
+ *
+ * That strip is what the crawl empties into, and it is why the merge no longer
+ * has to be a pinch.
+ */
+const WIDE_WIDTH = 19;
+const WIDEN_FROM_Z = 11.0;
+/**
+ * The cavern narrows again PAST the point where the two routes meet, not at it.
+ *
+ * `path` closes a width change with a shoulder wall across the step, and the
+ * first version put that shoulder on `CHAMBER` — the exact node where the main
+ * ramp lands. That walled off the side strip 1.2m short of the merge, and the
+ * strip's floor is still 0.44m below the ramp there against a 0.42m step
+ * offset: two centimetres of unclimbable, with the only other way out being
+ * the space under the ramp, which has already closed. Anyone who missed the
+ * jump was stuck at the bottom of the zone.
+ */
+const WIDEN_TO_Z = 4.0;
+
+/** One width function, read by the enclosure, the lower floor and the ceiling. */
+const widthAt = (z) => (z < WIDEN_FROM_Z && z > WIDEN_TO_Z ? WIDE_WIDTH : CLEAR_WIDTH);
+
+// The main line, in plan and in height. `BROW` is the lip you jump from, and
+// `LANDING_TOP` is where the far ledge hands back to sloping ground.
+//
+// Every x is 0, and that is the whole point — see the note on buildTunnel.
+const TOP = new THREE.Vector3(0, 0.1, 25.5);
+const BROW = new THREE.Vector3(0, -5.6, 18.6);
+const LANDING_TOP = new THREE.Vector3(0, -7.4, 13.6);
+const CHAMBER = new THREE.Vector3(0, -14.0, 4.8);
+const CHAMBER_TAIL = new THREE.Vector3(0, -14.0, WIDEN_TO_Z);
+const CHAMBER_END = new THREE.Vector3(0, -14.0, 2.0);
+
+/**
+ * The brow, at the basin's height rather than the ramp's.
+ *
+ * The enclosure uses this only to set how far DOWN its walls reach, and here
+ * that matters: from the brow on, the deepest thing the walls have to guard is
+ * the basin at −9.4, not the ramp at −5.6. Based on the ramp's own height they
+ * stopped nearly four metres above the basin's edge, and you could walk out
+ * from under the jump-off lip and through them.
+ */
+const BROW_FOOT = new THREE.Vector3(0, -9.4, 18.6);
+
+// The lower route. Same x as the main line at every z — only the heights
+// differ. See buildTunnel.
+const BASIN = new THREE.Vector3(0, -9.4, 17.6);
+const BASIN_END = new THREE.Vector3(0, -11.62, 13.6);
+const LOWER_WIDEN = new THREE.Vector3(0, -12.32, WIDEN_FROM_Z);
+
+/**
+ * The cavern floor from the brow down: the basin, the slope under the main
+ * line, and the chamber both routes end in. One list, because the enclosure
+ * and the floor have to be the same shape or they are back to disagreeing.
+ */
+const CAVERN = [BASIN, BASIN_END, LOWER_WIDEN, CHAMBER, CHAMBER_TAIL, CHAMBER_END];
+
 /**
  * The traversal tutorial, built entirely into geometry, with no prompts
  * anywhere: a ramp you cannot fail, a ledge you have to commit to, a 2.6m gap
  * that clears with the jump and refuses a walk, and a landing that drops you
  * further than you expected.
  *
- * ## Two routes, and why the gap has a floor under it
+ * ## Two routes, one enclosure
  *
- * The old version was a swept tube with a flattened floor band and six ledge
- * boxes sitting inside it. The tube was the most expensive geometry in the
- * zone and the worst surface the character controller had to resolve against
- * — the player walked on whatever triangles the sweep happened to emit.
+ * Miss the jump and you land on a lower route that rejoins the main line at
+ * the bottom. The drop is survivable on purpose: this is the first jump the
+ * game asks for, and the lesson it should teach is "jumps are a thing you do",
+ * not "jumps are a thing you die to". The cost of missing is the walk.
  *
- * Replacing it with ledges alone left 2.6m of the critical path with nothing
- * underneath it, which the collision audit correctly called a hole. So the
- * gap now spans a **lower route**: miss the jump and you land on a longer,
- * gentler path that rejoins the main line at the bottom. The drop is 3.8m,
- * which at this gravity arrives at 12.9 m/s — under the 14 m/s hard-landing
- * threshold and well under the 19 m/s damage threshold.
+ * That rejoin is SIDEWAYS, and it has to be. Two stacked surfaces that end at
+ * the same place converge, and the space between them is standing height, then
+ * crouching height, then nothing — you cannot merge onto a floor you are
+ * underneath. So the cavern opens out below `WIDEN_FROM_Z` and the merge
+ * happens in the strips beside the ramp, where there is nothing overhead.
  *
- * That is deliberate. This is the first jump the game asks for, and the
- * lesson it should teach is "jumps are a thing you do", not "jumps are a
- * thing you die to". The cost of missing is the walk, which is the same
- * currency the rest of the chapter charges in.
+ * Stacking two routes is what made this zone's collision the worst in the
+ * chapter, and two decisions fix it.
  *
- * Every slope below is under 40°, against a 52° climb limit.
+ * **The routes share a plan polyline.** They differ only in height. When they
+ * did not, every guard wall belonging to one route stood somewhere in the
+ * other route's floor — which is why the lower route's railings had tops you
+ * could step onto (cap −7.0 against a landing surface at −7.4, inside a 0.42m
+ * step offset) and then not step off again.
+ *
+ * **One enclosure, based on the lowest floor.** `ZoneBuilder.path` sits each
+ * wall on `min(from.y, to.y) − 0.5`, so a single path given the *lower*
+ * route's heights emits one continuous vertical surface from the bottom floor
+ * to the ceiling. That guards both routes at once, and neither route then
+ * carries walls of its own — the main line's floor is a ledge over the lower
+ * one, and walking off it is a drop that lands on something.
+ *
+ * ## Why every node is on x 0
+ *
+ * `ZoneBuilder.ramp` builds with Euler order YXZ, so a ramp's width axis stays
+ * horizontal: a wide slab on a diagonal heading throws a flat fin out sideways
+ * at the height of its own endpoint, reaching metres along z. This zone used to
+ * dogleg — x went −1 → 2.5 → 0 — and the fins that produced were the whole
+ * problem. The last segment at width 9 reached z ≈ 10.8 at y = −11.6 with the
+ * lower route at −12.4 beneath it: 0.4m of clearance, which the crouched player
+ * only got through by squeezing round. Every attempt to widen a floor made its
+ * fin bigger, which is why three of them sealed the crawl. At the top, the same
+ * effect left the entry ramp's slanted end short of the jump-off ledge's square
+ * one, opening fifteen cells of floor that stopped existing mid-corridor.
+ *
+ * A dead straight centreline makes every box in the zone axis-aligned, and a
+ * fin of an axis-aligned box is the box. The plan-view wiggle was never worth
+ * what it cost; the zone's interest is vertical — a ledge, a gap, a route
+ * underneath, a crawl — and none of that needed a bend.
+ *
+ * The slopes: 37.2° out of the doorway, 36.7° from the landing to the floor,
+ * against a 52° climb limit.
  */
-function buildTunnel(ctx, WAYPOINTS) {
+function buildTunnel(ctx) {
   const m = ctx.materials;
-  const b = WAYPOINTS.descentBottom;
 
-  // --- the main line -----------------------------------------------------
-  // R1: out of the doorway and down. Wide and shallow — the first thing the
-  // body does after standing up cannot be something it can fail.
-  // 11.6 wide, which is exactly the clear width `buildShell` encloses.
-  //
-  // The shell's walls stand 6.4m off the spine and are 1.2m thick, so their
-  // inner face is at 5.8 — while this ramp's floor was 8m wide, an edge at 4.0.
-  // That is 1.8m of open air down each side of the first thing the player
-  // walks on. Only the segments ABOVE the lower route get this treatment: the
-  // ones further down pass over it, and widening those drops their underside
-  // onto the crawl and seals it. See buildShell.
-  ctx.ramp(
-    new THREE.Vector3(0, 0.1, 25.5),
-    new THREE.Vector3(-3.0, -5.6, 18.6),
-    SHELL_WIDTH, 1.2, m.descentFloor
-  );
+  // --- the enclosure ------------------------------------------------------
+  // Walls only, and its spine is the LOWEST floor at each point: the main ramp
+  // while that is all there is, then the lower route once it exists. That is
+  // what puts every wall's base under the deepest thing it has to guard.
+  ctx.path([TOP, BROW_FOOT, ...CAVERN], {
+    width: widthAt,
+    floor: false,
+    walls: true,
+    wallHeight: 16,
+    wallThickness: 1.2,
+    wallMaterial: m.descentWall,
+    material: m.descentWall,
+  });
+
+  // --- the main line ------------------------------------------------------
+  // Out of the doorway and down. Wide and shallow — the first thing the body
+  // does after standing up cannot be something it can fail.
+  ctx.path([TOP, BROW], {
+    width: CLEAR_WIDTH,
+    thickness: 1.2,
+    material: m.descentFloor,
+    walls: false,
+  });
 
   // The jump-off ledge. Short on purpose: standing on it, the gap and the
   // landing beyond are both in frame, and there is nowhere to dither.
-  ctx.box(new THREE.Vector3(SHELL_WIDTH, 1, 1.2), new THREE.Vector3(-3.0, -6.1, 18.0), m.ledge);
+  ctx.box(new THREE.Vector3(CLEAR_WIDTH, 1, 1.2), new THREE.Vector3(0, -6.1, 18.0), m.ledge);
+
+  // The basin's back wall — the bedrock the entry ramp is cut into.
+  //
+  // The enclosure's walls run ALONGSIDE the route; nothing in `path` closes an
+  // end. The basin's floor stops just behind the jump-off lip, and behind that
+  // is the void under the entry ramp — eight metres of it, with the ramp's
+  // underside never dropping below −7.5. So standing in the basin, having just
+  // missed the jump, you could walk backwards off the world. Its top is under
+  // the lip's own surface, so it is bedrock from below and nothing from above.
+  ctx.box(
+    new THREE.Vector3(CLEAR_WIDTH + 2.4, 4.5, 1.2),
+    new THREE.Vector3(0, -7.95, 18.5),
+    m.descentWall
+  );
 
   // ---- the 2.6m gap: z 17.4 → 14.8 ----
 
   // The landing, 1.8m below the jump-off. Dropping further than you pushed off
   // from is what makes the jump read as a commitment rather than a step.
-  ctx.box(new THREE.Vector3(SHELL_WIDTH, 1, 1.2), new THREE.Vector3(-1.0, -7.9, 14.2), m.ledge);
+  ctx.box(new THREE.Vector3(CLEAR_WIDTH, 1, 1.2), new THREE.Vector3(0, -7.9, 14.2), m.ledge);
 
-  // These two pass OVER the lower route, and that is why they are thin.
-  //
-  // `ramp` hangs its thickness BELOW the walking surface, so widening a floor
-  // that passes over another one drags a 1.2m slab across more of the corridor
-  // beneath it. That is what sealed the crawl every previous time these were
-  // widened to meet the shell: not the width, the underside. At 0.35m thick the
-  // underside rises almost a metre and the two can be as wide as the room.
-  //
-  // The pinch the crawl needs is then owned by one slab that exists to be a
-  // pinch, below — a number that can be set rather than an accident of how
-  // thick a floor happens to be.
-  // z13.6, and it must stay z13.6: this start point sets the segment's slope,
-  // and that slope is what leaves the lower route its headroom. Starting it
-  // further back makes the ramp shallower, drops it over the crawl and seals a
-  // corridor the player has no other way out of.
-  ctx.ramp(
-    new THREE.Vector3(-1.0, -7.4, 13.6),
-    new THREE.Vector3(2.5, -11.6, 8.0),
-    SHELL_WIDTH, 0.35, m.descentFloor
-  );
-  // This last one keeps its original 9m width, and that is not an oversight.
-  //
-  // A `ramp` is a rotated box, so widening it spreads its FOOTPRINT along z as
-  // well as across the route — 5.8m of half-width times this segment's heading
-  // is 3.6m of extra z, against 2.8m at 9m wide. The extra corner reaches back
-  // to z≈11.6 and its top plane, extrapolated that far past its own endpoint,
-  // sits 0.6m over the lower route: a slab across the crawl, 0.63m of headroom
-  // where 1.16m is the minimum. Widening this is what sealed the crawl every
-  // time, and the audit's headroom profile is what finally said so.
-  ctx.ramp(
-    new THREE.Vector3(2.5, -11.6, 8.0),
-    new THREE.Vector3(0, -14.0, 4.8),
-    9, 1.2, m.descentFloor
-  );
+  // One straight run to the floor, and the bottom chamber. Thin, because this
+  // slab is also the lower route's ceiling for most of its length: `ramp` hangs
+  // thickness BELOW the walking surface, so a fat floor here is headroom taken
+  // from the corridor underneath.
+  ctx.path([LANDING_TOP, CHAMBER], {
+    width: CLEAR_WIDTH,
+    thickness: 0.35,
+    material: m.descentFloor,
+    walls: false,
+  });
 
-  // The bottom chamber floor, matched to the Green Vein's mouth.
-  //
-  // It was 12m wide against a cavern mouth that flares to 23m, and the shell's
-  // walls stop at z≈3, so its outer edges stood in open air for the last few
-  // metres before the handover. Widened to the shell's clear width and pulled
-  // back so the Green Vein's own flare — which brings its walls with it — takes
-  // over at z5 rather than meeting a wider slab in mid-air.
-  ctx.box(new THREE.Vector3(SHELL_WIDTH, 1, 5), new THREE.Vector3(b.x, b.y - 0.5, 4.5), m.descentFloor);
-
-  // --- the lower route, under the gap ------------------------------------
-  ctx.ramp(
-    new THREE.Vector3(-3.0, -9.4, 17.6),
-    new THREE.Vector3(-1.5, -11.4, 14.4),
-    8, 1.0, m.descentFloor
-  );
-  ctx.ramp(
-    new THREE.Vector3(-1.5, -11.4, 14.4),
-    new THREE.Vector3(2.0, -14.0, 5.0),
-    8, 1.0, m.descentFloor
-  );
-
-  // Walls down the lower route.
-  //
-  // `buildShell` walls the descent, but it follows the MAIN spine, and the lower
-  // route diverges from that spine by up to 5m — so the route you end up on by
-  // missing the jump was a ledge in open air with nothing at its edges. Walking
-  // into the crawl below scrubs a standing player sideways along the slab, and
-  // the scrub slid them straight off that edge and out of the chapter: y −13.8 to
-  // −166 and still falling. Found by `tools/controls.mjs`.
-  //
-  // Inner faces sit at ±3.9 against the route's half-width of 4, so the player
-  // meets a wall a little before the drop rather than at it.
-  const lowerSpine = [
-    new THREE.Vector3(-3.0, -9.4, 17.6),
-    new THREE.Vector3(-1.5, -11.4, 14.4),
-    new THREE.Vector3(2.0, -14.0, 5.0),
-  ];
-  for (let i = 0; i < lowerSpine.length - 1; i++) {
-    const p0 = lowerSpine[i];
-    const p1 = lowerSpine[i + 1];
-    const mid = p0.clone().lerp(p1, 0.5);
-    const dx = p1.x - p0.x;
-    const dz = p1.z - p0.z;
-    const len = Math.hypot(dx, dz);
-    // Euler(0, yaw, 0) with yaw = atan2(dx, dz) sends local +Z along the
-    // segment, so `size` reads (thickness, height, length).
-    const yaw = Math.atan2(dx, dz);
-    const px = dz / len;
-    const pz = -dx / len;
-    // The wall's base goes under the segment's LOWEST floor, not its midpoint.
-    // A vertical wall on a sloping floor otherwise leaves its bottom edge above
-    // the floor at the low end by half the segment's fall — a slot under the
-    // railing at exactly the place the wall scrub is pushing the player along it.
-    const base = Math.min(p0.y, p1.y) - 0.6;
-    const cap = mid.y + 3.4;
-    for (const side of [-1, 1]) {
-      ctx.box(
-        new THREE.Vector3(1.0, cap - base, len + 1.0),
-        new THREE.Vector3(mid.x + px * side * 4.4, (cap + base) * 0.5, mid.z + pz * side * 4.4),
-        m.descentWall,
-        { rotation: new THREE.Euler(0, yaw, 0), castShadow: false }
-      );
-    }
-  }
-
-  // The crawl.
-  //
-  // Crouch needs somewhere to crouch or it is a button that changes nothing,
-  // and this is the honest place for it: the lower route is where you end up
-  // having *missed* the jump, so the chapter teaches the verb at the moment it
-  // is already telling you that you got something wrong.
-  //
-  // 1.45m of clearance, against a 1.68m standing capsule and a 1.16m crouched
-  // one. The first draft used 1.25m, which is arithmetically enough — 9cm of
-  // margin — and it did not work: the character controller carries a 0.02m skin
-  // offset at each end, snap-to-ground pulls the capsule down into the floor,
-  // and autostep tries to lift it over what it is brushing. `tools/controls.mjs`
-  // caught it, crouched and blocked. 1.45m leaves ~0.25m either way, which also
-  // stops the crawl feeling like it is scraping — a ceiling you have to be
-  // pixel-perfect under reads as a bug even when it is passable.
-  //
-  // The slab hangs BELOW the line passed to `ramp`, so the line sits at the
-  // clearance plus the thickness.
-  ctx.ramp(
-    new THREE.Vector3(-0.98, -11.79 + 1.45 + 1.0, 13.0),
-    new THREE.Vector3(0.51, -12.89 + 1.45 + 1.0, 9.0),
-    // Width 9 against the lower route's 8: the slab has to overhang the floor it
-    // roofs. At width 7 it left 0.5m of open floor down each side, and a
-    // standing capsule (0.64m across) scraped along the edge and walked the
-    // whole crawl upright — `tools/controls.mjs` caught it doing 37m.
-    9, 1.0, m.shell,
-    { castShadow: false }
-  );
+  // --- the lower route ----------------------------------------------------
+  // The basin under the gap, then down to the same point the main line reaches.
+  // Nothing is beneath this floor, so it is free to be as wide as the cavern —
+  // and a floor that spans the full width is what turns every ledge above it
+  // into a survivable drop rather than a hole.
+  ctx.path(CAVERN, {
+    width: widthAt,
+    thickness: 1.0,
+    material: m.descentFloor,
+    walls: false,
+  });
 
   // The crawl.
   //
@@ -241,81 +257,52 @@ function buildTunnel(ctx, WAYPOINTS) {
   // carries a 0.02m skin offset at each end, snap-to-ground pulls the capsule
   // into the floor, and autostep tries to lift it over what it is brushing.
   //
-  // Width 9 against the lower route's 8: the slab has to overhang the floor it
-  // roofs, or a standing capsule scrapes along the open strip at the edge and
-  // walks the whole crawl upright.
+  // It sits above `WIDEN_FROM_Z`, where the cavern is still one route wide, so
+  // there is no way around it; and it is 13m across against an 11.6m cavern, so
+  // its ends are buried in the walls. At width 9 over an 8m route it left half
+  // a metre of open floor down each side and a standing capsule scraped along
+  // the edge and walked the whole thing upright.
   //
-  // The slab hangs BELOW the line passed to `ramp`, so the line sits at the
+  // The slab hangs BELOW the line passed to `ramp`, so the line is the
   // clearance plus the thickness.
-  const CRAWL_CLEARANCE = 1.45;
   ctx.ramp(
-    new THREE.Vector3(-0.98, -11.79 + CRAWL_CLEARANCE + 1.0, 13.0),
-    new THREE.Vector3(0.51, -12.89 + CRAWL_CLEARANCE + 1.0, 9.0),
-    9, 1.0, m.shell,
+    new THREE.Vector3(0, -9.81, 13.0),
+    new THREE.Vector3(0, -10.35, WIDEN_FROM_Z),
+    13, 0.5, m.shell,
     { castShadow: false }
   );
 
-  buildShell(ctx);
+  buildCeiling(ctx);
   buildCamp(ctx, new THREE.Vector3(-3.0, -5.4, 19.5));
 }
 
-/** The clear width `buildShell` encloses. Floors above the lower route match it. */
-const SHELL_WIDTH = 11.6;
-
 /**
- * Walls and a ceiling around the descent. Non-colliding except the walls,
- * which are what stop the player walking off the side of a ramp into the void
- * — the ramps themselves are only as wide as they are.
+ * The lid. Separate from the enclosure because it hangs off the MAIN line's
+ * heights rather than the lowest floor — a ceiling measured from the bottom of
+ * a two-storey cavern is a ceiling nobody can see.
+ *
+ * It does not cast. One directional key lights the whole chapter and every
+ * zone in it is roofed, so a shadow-casting roof means the key reaches nothing
+ * and the interior is lit by ambient alone — which is what turned the
+ * character into a black silhouette on the first pass. Walls and floors still
+ * cast onto each other; the lid is simply transparent to the light, which is a
+ * stage-lighting convention, not a cheat.
  */
-function buildShell(ctx) {
+function buildCeiling(ctx) {
   const m = ctx.materials;
-
-  // Sampled from the main line rather than from a curve, so the enclosure
-  // follows the path the player is actually on.
-  //
-  // It is NEAR the floors' own endpoints rather than identical to them, which
-  // costs about 0.3m of alignment where the two differ. Reconciling them was
-  // tried both ways and measured worse: moving the FLOOR to match re-seals the
-  // crawl below, because the ramp's start point is what sets its slope, and
-  // moving the SPINE to match moved the walls off the ledges instead. The real
-  // fix is one enclosure sized to both routes' union rather than a spine and a
-  // width each — a rewrite, not a number. See STATUS.
-  const spine = [
-    new THREE.Vector3(0, 0.1, 25.5),
-    new THREE.Vector3(-3.0, -5.6, 18.6),
-    new THREE.Vector3(-1.0, -7.4, 14.2),
-    new THREE.Vector3(2.5, -11.6, 8.0),
-    new THREE.Vector3(0, -14.0, 4.0),
-  ];
+  const spine = [TOP, BROW, LANDING_TOP, CHAMBER, CHAMBER_END];
 
   for (let i = 0; i < spine.length - 1; i++) {
     const p0 = spine[i];
     const p1 = spine[i + 1];
     const mid = p0.clone().lerp(p1, 0.5);
     const yaw = Math.atan2(p1.x - p0.x, p1.z - p0.z);
-    const len = Math.hypot(p1.x - p0.x, p1.z - p0.z) + 2.0;
-    const rot = new THREE.Euler(0, yaw, 0);
-    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-
-    for (const side of [-1, 1]) {
-      ctx.box(
-        new THREE.Vector3(1.2, 16, len),
-        mid.clone().addScaledVector(right, side * 6.4).setY(mid.y + 2.0),
-        m.descentWall,
-        { rotation: rot }
-      );
-    }
-    // The ceiling does not cast. One directional key lights the whole chapter
-    // and every zone in it is roofed, so a shadow-casting roof means the key
-    // reaches nothing and the interior is lit by ambient alone — which is what
-    // turned the character into a black silhouette on the first pass. Walls
-    // and floors still cast onto each other; the lid is simply transparent to
-    // the light, which is a stage-lighting convention, not a cheat.
+    const run = Math.hypot(p1.x - p0.x, p1.z - p0.z) + 2.0;
     ctx.box(
-      new THREE.Vector3(13.6, 1.0, len),
+      new THREE.Vector3(widthAt(mid.z) + 2.4, 1.0, run),
       mid.clone().setY(mid.y + 9.5),
       m.shell,
-      { rotation: rot, castShadow: false }
+      { rotation: new THREE.Euler(0, yaw, 0), castShadow: false }
     );
   }
 }

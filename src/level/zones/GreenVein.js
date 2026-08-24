@@ -82,8 +82,16 @@ function buildCavern(ctx) {
   for (let i = 0; i <= SEGMENTS; i++) {
     const t = i / SEGMENTS;
     const z = FROM_Z + (TO_Z - FROM_Z) * t;
+    // The centreline arrives at x0, because that is where the stairs are.
+    //
+    // It used to drift to `FLOOR_OFFSET(TO_Z)` — x+2.2 — while the handover
+    // node and PoolApproach's stairs both sit on x0. `path` closes a width
+    // change with a shoulder, but it places that shoulder off ONE centreline,
+    // so two segments 2.2m apart leave the wider one's floor sticking out past
+    // the shoulder on the far side. Two cells of walk-off at x11.3…12.0,
+    // z−54.7, and the last unguarded edges in the chapter.
     spine.push(new THREE.Vector3(
-      THREE.MathUtils.lerp(FLOOR_OFFSET(FROM_Z), FLOOR_OFFSET(TO_Z), t),
+      THREE.MathUtils.lerp(FLOOR_OFFSET(FROM_Z), 0, t),
       floorY(z),
       z
     ));
