@@ -1007,6 +1007,50 @@ async function main() {
       console.log('  ✓ everywhere you can reach, you can leave');
     }
 
+    // ---- clearance probe, debug only -------------------------------------
+    // COLLISION_DEBUG=1 prints the floor, the ceiling over it and the gap
+    // between along the Descent's lower route. The crawl's whole design is that
+    // number staying between the crouched capsule and the standing one, and
+    // reasoning about it from the authoring coordinates has been wrong every
+    // time — two ramps and a slab all contribute a ceiling there.
+    if (process.env.COLLISION_DEBUG) {
+      const prof = await page.evaluate(({ STAND_H, CROUCH_H }) => {
+        const api = window.__VESSEL_API;
+        const ph = api.engine.resolve('physics');
+        const rows = [];
+        for (let z = 16; z >= 6; z -= 0.5) {
+          // The lower route's own centreline and expected height, so the ray
+          // starts UNDER the main line rather than inside its floor slab — the
+          // first version began at a fixed y−8 and spent the whole profile
+          // measuring the underside of the corridor above.
+          const seg2 = z <= 14.4;
+          const t = seg2 ? (14.4 - z) / 9.4 : (17.6 - z) / 3.2;
+          const x = seg2 ? -1.5 + t * 3.5 : -3.0 + t * 1.5;
+          const expect = seg2 ? -11.4 + t * -2.6 : -9.4 + t * -2.0;
+          // Every face in the column, not just the first, with its normal —
+          // "what is the floor here" has been the wrong question three times
+          // running in this corridor, because two ramps and a slab all pass
+          // through it at different heights.
+          const faces = [];
+          let cursor = expect + 5;
+          for (let i = 0; i < 20 && cursor > expect - 2; i++) {
+            const h = ph.raycast({ x, y: cursor, z }, { x: 0, y: -1, z: 0 },
+              cursor - (expect - 2), { solid: false });
+            if (!h) break;
+            const y = cursor - h.distance;
+            faces.push(`${y.toFixed(2)}/${h.normal.y.toFixed(2)}`);
+            cursor = y - 0.03;
+          }
+          rows.push({ z: +z.toFixed(1), x: +x.toFixed(2), expect: +expect.toFixed(2), faces });
+        }
+        return rows;
+      }, { STAND_H: STAND_HEIGHT, CROUCH_H: CROUCH_HEIGHT });
+      console.log('\n──── the lower route: every face in the column (y/normal.y) ────');
+      for (const r of prof) {
+        console.log(`  z=${String(r.z).padStart(5)} x=${String(r.x).padStart(5)} expect=${String(r.expect).padStart(7)}  ${r.faces.join('  ')}`);
+      }
+    }
+
     // ---- 6: wedges ------------------------------------------------------
     // A point where the capsule cannot move in ANY direction is a place the
     // player gets stuck, and it is the bug they will actually hit. Geometry

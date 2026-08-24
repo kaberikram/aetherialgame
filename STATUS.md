@@ -88,7 +88,7 @@ dais and balustrade are built to the same rule by hand. See DECISIONS D67–D68.
 
 | where | count | what |
 |---|---|---|
-| Descent | 45 | x −9…7.5, z 6…25.5. Its shell walls sit 5.8m off the spine and its floors are 8–9m wide. |
+| Descent | 45 | x −9…6.8, z 6…25.5. Its shell walls sit 5.8m off the spine; the floors that pass over the lower route cannot be widened to match without sealing the crawl. |
 | Green Vein | 2 | x 11.3–12.0, z −54.7, at the handover to the pool stairs. |
 
 Plus an 8-cell slot (x 0.8–5.3, z 6.8–19.5) where the Descent's two routes
@@ -97,12 +97,27 @@ controller, so it is real.
 
 **The Descent is the hard one and it is hard for a reason.** It is two stacked
 routes sharing one shell: the main line, and the lower route you land on by
-missing the jump. Converting it to `path()` and every attempt to widen its
-floors to meet its walls pushed the main line's floor slab down onto the crawl
-below and sealed it — `npm run controls`'s crawl case caught each attempt. Doing
-it properly means giving the two routes one shared enclosure sized to their
-union rather than a width each, which is a real piece of work rather than a
-number change.
+missing the jump. A `ramp` hangs its thickness BELOW its surface, so widening a
+floor that passes over another one drags a slab across the corridor beneath —
+and because a ramp is a rotated box, widening also spreads its footprint along
+its own axis, so a corner reaches back over the crawl and its extrapolated plane
+sits 0.6m above the route below. Both were found by the headroom profile
+(`COLLISION_DEBUG=1 npm run collision`), which is now the tool for this corner
+of the level and is worth reaching for before touching any of its numbers.
+
+What is in: the segments above the lower route are widened to the shell's clear
+width, the one passing over it is thinned to 0.35m so its underside clears, and
+the crawl's pinch is owned by one slab that exists to be a pinch. The lower
+route is now crouch-passable end to end — `controls` reports the crouched
+capsule reaching z3.65 where it used to stop at z7.66.
+
+What is not: the last 45 edges need floors and walls off ONE spine and width,
+and neither can move to meet the other — moving the floor re-seals the crawl
+(the ramp's start sets its slope), and moving the spine takes the walls off the
+ledges. Joint overlaps were tried and reverted: they closed wedges but collapsed
+the audit's reachable set from 7,807 cells to 635, and an improvement that
+cannot be measured is not one. The real fix is one enclosure sized to both
+routes' union rather than a spine and a width each — a rewrite, not a number.
 
 **There is no fall backstop.** No kill plane, no respawn-on-fall — by choice, so
 the geometry gets trusted. Until the 47 are gone, those are the places that

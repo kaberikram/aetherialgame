@@ -98,13 +98,37 @@ function buildTunnel(ctx, WAYPOINTS) {
 
   // The landing, 1.8m below the jump-off. Dropping further than you pushed off
   // from is what makes the jump read as a commitment rather than a step.
-  ctx.box(new THREE.Vector3(8, 1, 1.2), new THREE.Vector3(-1.0, -7.9, 14.2), m.ledge);
+  ctx.box(new THREE.Vector3(SHELL_WIDTH, 1, 1.2), new THREE.Vector3(-1.0, -7.9, 14.2), m.ledge);
 
+  // These two pass OVER the lower route, and that is why they are thin.
+  //
+  // `ramp` hangs its thickness BELOW the walking surface, so widening a floor
+  // that passes over another one drags a 1.2m slab across more of the corridor
+  // beneath it. That is what sealed the crawl every previous time these were
+  // widened to meet the shell: not the width, the underside. At 0.35m thick the
+  // underside rises almost a metre and the two can be as wide as the room.
+  //
+  // The pinch the crawl needs is then owned by one slab that exists to be a
+  // pinch, below — a number that can be set rather than an accident of how
+  // thick a floor happens to be.
+  // z13.6, and it must stay z13.6: this start point sets the segment's slope,
+  // and that slope is what leaves the lower route its headroom. Starting it
+  // further back makes the ramp shallower, drops it over the crawl and seals a
+  // corridor the player has no other way out of.
   ctx.ramp(
     new THREE.Vector3(-1.0, -7.4, 13.6),
     new THREE.Vector3(2.5, -11.6, 8.0),
-    8, 1.2, m.descentFloor
+    SHELL_WIDTH, 0.35, m.descentFloor
   );
+  // This last one keeps its original 9m width, and that is not an oversight.
+  //
+  // A `ramp` is a rotated box, so widening it spreads its FOOTPRINT along z as
+  // well as across the route — 5.8m of half-width times this segment's heading
+  // is 3.6m of extra z, against 2.8m at 9m wide. The extra corner reaches back
+  // to z≈11.6 and its top plane, extrapolated that far past its own endpoint,
+  // sits 0.6m over the lower route: a slab across the crawl, 0.63m of headroom
+  // where 1.16m is the minimum. Widening this is what sealed the crawl every
+  // time, and the audit's headroom profile is what finally said so.
   ctx.ramp(
     new THREE.Vector3(2.5, -11.6, 8.0),
     new THREE.Vector3(0, -14.0, 4.8),
@@ -205,6 +229,32 @@ function buildTunnel(ctx, WAYPOINTS) {
     { castShadow: false }
   );
 
+  // The crawl.
+  //
+  // Crouch needs somewhere to crouch or it is a button that changes nothing,
+  // and this is the honest place for it: the lower route is where you end up
+  // having *missed* the jump, so the chapter teaches the verb at the moment it
+  // is already telling you that you got something wrong.
+  //
+  // 1.45m of clearance against a 1.68m standing capsule and a 1.16m crouched
+  // one. 1.25m is arithmetically enough and does not work — the controller
+  // carries a 0.02m skin offset at each end, snap-to-ground pulls the capsule
+  // into the floor, and autostep tries to lift it over what it is brushing.
+  //
+  // Width 9 against the lower route's 8: the slab has to overhang the floor it
+  // roofs, or a standing capsule scrapes along the open strip at the edge and
+  // walks the whole crawl upright.
+  //
+  // The slab hangs BELOW the line passed to `ramp`, so the line sits at the
+  // clearance plus the thickness.
+  const CRAWL_CLEARANCE = 1.45;
+  ctx.ramp(
+    new THREE.Vector3(-0.98, -11.79 + CRAWL_CLEARANCE + 1.0, 13.0),
+    new THREE.Vector3(0.51, -12.89 + CRAWL_CLEARANCE + 1.0, 9.0),
+    9, 1.0, m.shell,
+    { castShadow: false }
+  );
+
   buildShell(ctx);
   buildCamp(ctx, new THREE.Vector3(-3.0, -5.4, 19.5));
 }
@@ -222,6 +272,14 @@ function buildShell(ctx) {
 
   // Sampled from the main line rather than from a curve, so the enclosure
   // follows the path the player is actually on.
+  //
+  // It is NEAR the floors' own endpoints rather than identical to them, which
+  // costs about 0.3m of alignment where the two differ. Reconciling them was
+  // tried both ways and measured worse: moving the FLOOR to match re-seals the
+  // crawl below, because the ramp's start point is what sets its slope, and
+  // moving the SPINE to match moved the walls off the ledges instead. The real
+  // fix is one enclosure sized to both routes' union rather than a spine and a
+  // width each — a rewrite, not a number. See STATUS.
   const spine = [
     new THREE.Vector3(0, 0.1, 25.5),
     new THREE.Vector3(-3.0, -5.6, 18.6),
