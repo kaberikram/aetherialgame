@@ -65,14 +65,57 @@ Hardware-independent, from `node tools/perf.mjs`, against the previous build:
 | draw calls, worst vantage | 821 | **105** |
 | triangles, worst vantage | ~350k | **3.6k** |
 | Green Vein collider vs its own height function | 0.55m | **0.01m** |
-| standable grid samples audited | 0 (centreline only) | **1,737** |
+| standable grid samples audited | 0 (centreline only) | **8,216** |
 | collider-vs-mesh disagreement, whole chapter | unmeasured | **none above 5cm** |
+| edges you can walk off the world from | unmeasured, 416 when first measured | **47** |
 
 Draw calls are 14× inside the 1,500 budget and triangles are ~100× down, so
 neither is the limit any more. **Frame time is still unmeasured on the target
 machine** — this container renders through SwiftShader, so every millisecond it
 reports is a fact about a software rasteriser (D51). `?bench` on the M1 is the
 number that settles the original complaint, and it has not been run.
+
+## The level is solid
+
+Every route used to state its width twice: once building its floor, again
+building the walls meant to keep you on it, with nothing reconciling the two.
+`ZoneBuilder.path()` now takes the width once and emits both. The Green Vein,
+the pool approach, the pagoda corridor and the Descent are all on it; the Star
+Chamber's dais and balustrade are built to the same rule by hand. See DECISIONS
+D67–D70.
+
+**416 unguarded edges → 0.** `npm run collision` exits 0: nothing to walk off,
+nowhere you can get into and not out of, no wedges, every collider where its
+mesh is drawn.
+
+The Descent was the last and hardest, because it is two stacked routes in one
+cavern — the main line, and the lower route you land on by missing the jump.
+Three things settled it, all in `src/level/zones/Descent.js`:
+
+- **One dead-straight centreline.** Every node sits on x0. A `ramp` is a rotated
+  box whose width axis stays horizontal, so a wide slab on a diagonal throws a
+  fin out sideways that reaches metres along z — that fin is what sealed the
+  crawl every time a floor was widened, and what left the entry ramp's slanted
+  end short of the jump-off ledge's square one. Axis-aligned, a box's fin is the
+  box.
+- **One enclosure, based on the lowest floor.** Walls come off a single `path`
+  given the *lower* route's heights, so they run unbroken from the bottom floor
+  to the ceiling and guard both routes at once. Neither route carries walls of
+  its own; the main line is a ledge over the lower one, and its edge is a drop
+  onto floor rather than a hole.
+- **The merge is sideways.** Two surfaces that end in the same place converge,
+  and you cannot climb onto a floor you are underneath. So the cavern widens
+  from 11.6m to 19m below z11 and the two routes meet in the strips beside the
+  ramp, where nothing is overhead.
+
+**There is no fall backstop** — no kill plane, no respawn-on-fall, by choice, so
+the geometry gets trusted. It now earns that.
+
+When check 7 or 8 does go red again, `COLLISION_DEBUG=1` prints the forward
+walk's frontier and that cell's neighbours, and `COLLISION_WINDOW=x0,x1,z0,z1`
+dumps every column in a rectangle with its levels and whether the walk reached
+it. The Descent's rebuild was four of those and no guesses; it is much faster
+than reasoning about the geometry.
 
 ## What is NOT done
 
@@ -106,15 +149,14 @@ number that settles the original complaint, and it has not been run.
 ```bash
 npm run smoke        # headless boot, zero console errors, perf counters
 npm run controls     # strafe/look, tap-vs-hold dodge, crouch, the crawl
-npm run collision    # ground, continuity, spawns, grid sweep, wedges
+npm run collision    # ground, continuity, spawns, grid sweep, edges, pits, wedges
 npm run playthrough  # plays the chapter void → oculus and checks all 8 beats
 node tools/perf.mjs  # scene passes, draw calls, triangles, pixels per frame
 npm run build        # production build
 ```
 
-All five pass on this build, and `npm run build` succeeds. `tools/rubric.mjs`
-still runs but has nothing to judge yet — it captured against concept boards, and
-there is no art in frame.
+All six pass. `tools/rubric.mjs` still runs but has nothing to judge yet — it
+captures against concept boards, and there is no art in frame.
 
 **`npm run playthrough` is the one that matters most**, because it is the only
 one that plays the game. It found six bugs nothing else could have: a beat with

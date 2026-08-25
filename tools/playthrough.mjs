@@ -77,7 +77,7 @@ const ROUTE = [
   // bot commits on the approach rather than hopping on a timer. Blind periodic
   // jumping put it in the lower route, where the crouch crawl stopped it dead —
   // which was the crawl working, and the bot not knowing the verb.
-  { to: 'descentBottom', steps: 2400, label: 'the descent', jumpZ: [17.2, 18.8] },
+  { to: 'descentBottom', steps: 2400, label: 'the descent', jumpZ: [17.3, 17.9] },
   { to: 'greenVein', steps: 1200, label: 'into the Green Vein' },
   { to: 'sword', steps: 1200, label: 'to the sword', action: 'pickup' },
   { to: 'poolApproach', steps: 2400, label: 'down to the pool' },

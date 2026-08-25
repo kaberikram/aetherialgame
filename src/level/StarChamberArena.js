@@ -148,6 +148,7 @@ export class StarChamberArena {
     // draw call, and nothing left to diverge.
     const STEPS = 3;
     const ARC = 32;
+    const DAIS_RISE = 0.35;
     const daisPos = [];
     const daisNrm = [];
     const _m4 = new THREE.Matrix4();
@@ -176,9 +177,20 @@ export class StarChamberArena {
       // Bands overlap by 0.5m so no boundary is a butt joint. The innermost
       // starts at `radius` rather than beyond it, so it meets the basin instead
       // of leaving a slot at the waterline.
-      const inner = this.radius + i * 1.15;
-      const outer = inner + 1.65;
-      const top = this.center.y + (0.34 + i * 0.30) - 0.05 + i * 0.30;
+      // The innermost band reaches 0.6m back UNDER the basin. Its collider boxes
+      // are chords, and a chord's inner edge bows outward from the circle it
+      // approximates by r(1−cos θ) ≈ 0.1m between its ends — so butting it up
+      // against the basin's rim at exactly `radius` left a hairline ring of
+      // nothing. Too narrow to fall through, and still a gap.
+      const inner = i === 0 ? this.radius - 0.6 : this.radius + i * 1.15;
+      const outer = this.radius + (i + 1) * 1.15 + 0.5;
+      // 0.35m a step, not the 0.60m these rings used to be drawn at. The rings
+      // had no colliders then, so nobody could climb them and nobody noticed;
+      // now that they are the floor, a 0.60m rise against a 0.42m step offset
+      // means the player cannot get out of the arena at all — the dais became a
+      // wall around the fight. Three steps of 0.35 also match the 0.35 rise from
+      // the basin's rim onto the first one.
+      const top = this.center.y + 0.29 + i * DAIS_RISE;
       const rm = (inner + outer) * 0.5;
       // 1.12 overlap tangentially, or the ring leaks between segments.
       const arcLen = ((Math.PI * 2 * rm) / ARC) * 1.12;
@@ -229,6 +241,43 @@ export class StarChamberArena {
       }
     }
 
+    // --- the balustrade ----------------------------------------------------
+    //
+    // The dais ends at `radius + 3.95` and the chamber shell beyond it is
+    // decoration with no collider, so the outermost tread was a cliff into
+    // nothing all the way round. The containment ring used to hide that by
+    // accident — and then it stopped, because containment now comes down when
+    // the boss dies, which is exactly when the player is free to wander to the
+    // edge.
+    //
+    // So the rim gets something permanent. Naga balustrades flank a candi's
+    // stairs in the reference the chapter is drawing on, and a low rail reads as
+    // architecture where an invisible wall reads as a bug. Two doorways: the
+    // stairs come in on +z, the corridor to the Pagoda Well leaves on −z.
+    const rails = [];
+    const RAIL_R = this.radius + 4.2;
+    const RAIL_N = 48;
+    const railStep = (Math.PI * 2) / RAIL_N;
+    const railPanel = RAIL_R * railStep * 1.15;
+    // Angle difference the only way that is right for every pair of angles.
+    //
+    // `d = |a − door|; if (d > π) d = 2π − d` looks like the same thing and is
+    // not: with `door = −π/2` and `a` running 0…2π the raw difference reaches
+    // 7.85, and `2π − 7.85` is NEGATIVE — which is less than any threshold, so
+    // every panel in that range counted as "inside the doorway". A whole
+    // quadrant of the balustrade, from a≈290° to 360°, silently never got built,
+    // and the dais rim there was a cliff into nothing.
+    const angleGap = (a, door) => Math.abs(Math.atan2(Math.sin(a - door), Math.cos(a - door)));
+
+    for (let i = 0; i < RAIL_N; i++) {
+      const a = i * railStep;
+      const gap = [Math.PI / 2, -Math.PI / 2].some((door) => angleGap(a, door) < railStep * 2.5);
+      if (gap) continue;
+      const panel = this.#railPanel(a, RAIL_R, railPanel, m.chamberStep);
+      this.group.add(panel);
+      rails.push(panel);
+    }
+
     this.setContained(true);
 
 
@@ -247,10 +296,35 @@ export class StarChamberArena {
     // water surface floating 6cm above it and reports the whole pool as drift.
     this.group.traverse((o) => { o.userData.noCollide = true; });
     this.floorMesh = floorMesh;
-    this.walkable = [floorMesh, dais];
+    // Rails collide, so they are not decoration and must stay visible to the
+    // collider-vs-mesh comparison.
+    this.walkable = [floorMesh, dais, ...rails];
     for (const o of this.walkable) o.userData.noCollide = false;
 
     return this;
+  }
+
+  /**
+   * One panel of the rim balustrade: mesh and collider from one transform, the
+   * rule `ZoneBuilder` states and the dais above already follows.
+   */
+  #railPanel(a, r, panel, material) {
+    const size = new THREE.Vector3(0.6, 1.6, panel);
+    const at = new THREE.Vector3(
+      this.center.x + Math.cos(a) * r,
+      this.center.y + 1.81, // stands on the outermost tread
+      this.center.z + Math.sin(a) * r
+    );
+    // Y-rotation of −a sends local +X radial and +Z tangential, so `size` reads
+    // (through the rail, up, along it).
+    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0));
+    this.physics.addStaticBox(size, at, quat, { group: FILTERS.world });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), material);
+    mesh.position.copy(at);
+    mesh.quaternion.copy(quat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
   }
 
   /**

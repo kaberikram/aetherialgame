@@ -23,6 +23,21 @@
  *
  *   node tools/collision.mjs
  *   node tools/collision.mjs --port 5331
+ *
+ * When check 7 or 8 fails, the verdict tells you how many cells and roughly
+ * where; these tell you why:
+ *
+ *   COLLISION_DEBUG=1              the two walks' start nodes, their overlap,
+ *                                  how far forward got, and that frontier
+ *                                  cell's four neighbours — what is there and
+ *                                  what you would land on stepping across.
+ *   COLLISION_WINDOW=x0,x1,z0,z1   every column in that rectangle: its floors,
+ *                                  every level above them, and whether the
+ *                                  forward walk reached it. Needs
+ *                                  COLLISION_DEBUG. This is the one that
+ *                                  answers "what IS that surface" without
+ *                                  another round of arithmetic — the Descent's
+ *                                  rebuild was four of these and no guesses.
  */
 import { chromium } from 'playwright';
 import { spawn, execSync } from 'node:child_process';
@@ -84,12 +99,23 @@ const PATH_SEGMENTS = [
  * those extend well past the geometry so the atmosphere changes before you
  * arrive, and sweeping them would sample mostly empty air.
  */
+const GRID_STEP = 0.75;
 const GRID_ZONES = [
-  { id: 'descent', minX: -7, maxX: 7, minZ: 2, maxZ: 42, step: 1.5, floorMin: -16.5, floorMax: 1.5 },
-  { id: 'greenVein', minX: -12, maxX: 12, minZ: -52, maxZ: 2, step: 1.5, floorMin: -22.5, floorMax: -13.0 },
-  { id: 'starChamber', minX: -16, maxX: 16, minZ: -92, maxZ: -54, step: 1.5, floorMin: -25.5, floorMax: -21.0 },
-  { id: 'pagodaWell', minX: -24, maxX: 24, minZ: -145, maxZ: -96, step: 2.0, floorMin: -27.0, floorMax: -22.0 },
-];
+  // Footprints OVERLAP their neighbours on purpose. The reachability walk in
+  // check 7/8 crosses cells, so a band of z that no zone samples is a wall to
+  // it — and the first version left two: z −52…−54 between the Green Vein and
+  // the Star Chamber, and z −92…−96 between the Star Chamber and the Pagoda
+  // Well. The chapter came back as four disconnected islands.
+  { id: 'descent', minX: -9, maxX: 9, minZ: 2, maxZ: 42, floorMin: -16.5, floorMax: 1.5 },
+  // maxZ 6, not 2: the mouth flare reaches z5, and this zone's band must be the
+  // one that claims those columns. Scanned after `descent`, so where the two
+  // footprints overlap this zone's floor wins the cell over the descent band's
+  // view of the same column — which would otherwise be the top of this zone's
+  // own ceiling.
+  { id: 'greenVein', minX: -18, maxX: 18, minZ: -58, maxZ: 6, floorMin: -22.5, floorMax: -13.0 },
+  { id: 'starChamber', minX: -20, maxX: 20, minZ: -100, maxZ: -48, floorMin: -26.0, floorMax: -20.5 },
+  { id: 'pagodaWell', minX: -24, maxX: 24, minZ: -145, maxZ: -90, floorMin: -27.0, floorMax: -21.0 },
+].map((z) => ({ ...z, step: GRID_STEP }));
 
 /**
  * Points to test for wedges. Sparser than the grid sweep because each one runs
@@ -128,6 +154,19 @@ const CROUCH_HEIGHT = (0.26 + 0.32) * 2; // ≈1.16m
  * against the live value below, like the capsule heights.
  */
 const STEP_OFFSET = 0.42;
+
+/** Capsule radius, from `TUNING.movement.capsuleRadius`. Asserted below. */
+const CAPSULE_RADIUS = 0.32;
+
+/**
+ * A drop past this is reported, not failed.
+ *
+ * The Descent's authored jump gap drops 3.8m onto its lower route, which is
+ * design, so the threshold sits above it. Anything deeper is worth a look
+ * without being a defect on its own — the defect is a drop onto *nothing*, and
+ * that is what check 7 fails on.
+ */
+const DROP_WARN = 6.0;
 
 const free = () => { try { execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`, { stdio: 'ignore' }); } catch {} };
 
@@ -172,6 +211,7 @@ async function main() {
         crouch: (m.crouchHalfHeight + m.capsuleRadius) * 2,
         slopeCos: Math.cos((m.maxSlopeDegrees * Math.PI) / 180),
         stepOffset: m.stepOffset,
+        radius: m.capsuleRadius,
       };
     });
     for (const [name, mine, theirs] of [
@@ -179,6 +219,7 @@ async function main() {
       ['crouch height', CROUCH_HEIGHT, live.crouch],
       ['slope limit', WALKABLE_NORMAL_Y, live.slopeCos],
       ['step offset', STEP_OFFSET, live.stepOffset],
+      ['capsule radius', CAPSULE_RADIUS, live.radius],
     ]) {
       if (Math.abs(mine - theirs) > 1e-6) {
         throw new Error(
@@ -381,7 +422,7 @@ async function main() {
     // Requiring clearance fixes the first, the normal matrix fixes the second,
     // and `userData.noCollide` — which ZoneBuilder now sets at the one place
     // that knows whether a collider was registered — fixes the third.
-    const grid = await page.evaluate(({ zones, WALKABLE_NORMAL_Y, STAND_H, CROUCH_H }) => {
+    const grid = await page.evaluate(({ zones, WALKABLE_NORMAL_Y, STAND_H, CROUCH_H, GRID_STEP, CAP_R, DROP_WARN, STEP, WINDOW }) => {
       const api = window.__VESSEL_API;
       const ph = api.engine.resolve('physics');
       const THREE = api.THREE;
@@ -474,13 +515,38 @@ async function main() {
       // sampling artifact rather than something a player can stand on.
       const EPS = 0.037;
 
+      // One global lattice, not one per zone. Check 7 asks about a cell's
+      // NEIGHBOURS, and neighbours cross zone boundaries — a per-zone grid
+      // reports the seam between two rooms as the edge of the world.
+      const cells = new Map();
+      const key = (ix, iz) => `${ix},${iz}`;
+      const toIx = (v) => Math.round((v - EPS) / GRID_STEP);
+
       for (const z of zones) {
-        for (let x = z.minX + EPS; x <= z.maxX; x += z.step) {
-          for (let zz = z.minZ + EPS; zz <= z.maxZ; zz += z.step) {
-            // Find the first surface the capsule could actually occupy: an
-            // upward-facing face with a body's worth of air above it. A roof's
-            // top face passes the normal test and fails this one, which is the
-            // whole difference.
+        const ix0 = toIx(z.minX);
+        const ix1 = toIx(z.maxX);
+        const iz0 = toIx(z.minZ);
+        const iz1 = toIx(z.maxZ);
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const x = ix * GRID_STEP + EPS;
+          for (let iz = iz0; iz <= iz1; iz++) {
+            const zz = iz * GRID_STEP + EPS;
+            // Collect EVERY surface the capsule could occupy in this column,
+            // not just the topmost one.
+            //
+            // The Descent is two stacked levels — the main line, and the lower
+            // route you land on by missing the jump — and a one-surface-per-
+            // column grid cannot see the second. With only the top surface
+            // recorded, the reachability walk below crossed the gap, landed on
+            // the lower route, and then found every column ahead of it occupied
+            // by the main line 2m overhead: 547 of 8,887 cells reachable, and a
+            // chapter that appeared to dead-end at z13.
+            //
+            // A surface qualifies the same way it always did: upward-facing,
+            // inside the zone's floor band, with room for a body above it. A
+            // roof's top face passes the first test and fails the third, which
+            // is still the whole difference.
+            const stack = [];
             let py = null;
             let head = 0;
             // Start inside the room, just above the highest the floor gets, and
@@ -513,7 +579,10 @@ async function main() {
               // barrier, which is a 4.2m collider you are never meant to be on.
               if (hit.normal.y > WALKABLE_NORMAL_Y && y <= z.floorMax && y >= z.floorMin) {
                 const c = standableHead(x, y, zz);
-                if (c !== null) { py = y; head = c; break; }
+                if (c !== null) {
+                  if (py === null) { py = y; head = c; }
+                  stack.push(y);
+                }
               }
               cursor = y - 0.05; // duck under this surface and keep going
             }
@@ -521,6 +590,15 @@ async function main() {
                                        // which most of a bounding box is
             sampled++;
             perZone[z.id] = (perZone[z.id] ?? 0) + 1;
+            const ck = key(ix, iz);
+            const prior = cells.get(ck);
+            // Zone footprints overlap at seams. Merge rather than overwrite, or
+            // the second zone to scan a shared column deletes the first zone's
+            // view of it.
+            cells.set(ck, {
+              x, z: zz, py, zone: prior?.zone ?? z.id,
+              levels: prior ? [...new Set([...prior.levels, ...stack])].sort((a, b) => b - a) : stack,
+            });
             if (head < STAND_H) {
               crouchOnly.push({ zone: z.id, x: +x.toFixed(1), z: +zz.toFixed(1), head: +head.toFixed(2) });
             }
@@ -545,9 +623,284 @@ async function main() {
           }
         }
       }
-      return { sampled, mismatched, crouchOnly, perZone, noRoom };
+      // ---- reachability ------------------------------------------------
+      //
+      // Every question below is about places the PLAYER can get to. Without
+      // that gate the sweep asks them of ceiling tops and wall caps too — real
+      // upward-facing surfaces with real open air beside them, which is how a
+      // roof gets reported as a hole in the floor.
+      //
+      // Edges are directed, because falling is. You can enter a cell far below
+      // you; you cannot leave for one more than a step above you.
+      const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      /**
+       * Is there a WALL between this cell and its neighbour?
+       *
+       * The normal test is not optional. Without it this fired on anything the
+       * ray touched, and under the Descent's lower route that is the main
+       * line's floor slab passing overhead — so the walk decided the lower
+       * route was sealed and reported the whole of it as a pit, while the real
+       * controller walks it out into the Green Vein in one go. A ceiling is not
+       * a wall; only a face too steep to climb is.
+       *
+       * Knee height, not chest: above the step offset, below anything the
+       * player would duck under.
+       */
+      const blocked = (a, dx, dz) => {
+        const hit = ph.raycast(
+          { x: a.x, y: a.py + 0.6, z: a.z },
+          { x: dx, y: 0, z: dz },
+          GRID_STEP + CAP_R,
+          { exclude: skip }
+        );
+        return !!hit && Math.abs(hit.normal.y) < WALKABLE_NORMAL_Y;
+      };
+
+      const nearestCell = (p) => {
+        let best = null;
+        let bestD = Infinity;
+        for (const [k, c] of cells) {
+          const d = Math.hypot(c.x - p.x, c.z - p.z) + Math.abs(c.py - p.y) * 0.5;
+          if (d < bestD) { bestD = d; best = k; }
+        }
+        return best;
+      };
+
+      /**
+       * Where you end up stepping from height `y` into a column: the highest
+       * surface you do not have to climb to. That is what the capsule actually
+       * does — it walks onto anything within a step, and falls onto whatever is
+       * under that.
+       */
+      const landing = (col, y) => {
+        let best = null;
+        for (const l of col.levels) {
+          if (l <= y + STEP && (best === null || l > best)) best = l;
+        }
+        return best;
+      };
+
+      /** Nodes are (column, surface), because columns can hold two floors. */
+      const nodeKey = (k, y) => `${k}@${y.toFixed(2)}`;
+
+      const walk = (starts, forward) => {
+        const seen = new Set();
+        const queue = [];
+        for (const st of starts) {
+          if (!st) continue;
+          seen.add(nodeKey(st.k, st.y));
+          queue.push(st);
+        }
+        while (queue.length) {
+          const cur = queue.pop();
+          const [ix, iz] = cur.k.split(',').map(Number);
+          const a = cells.get(cur.k);
+          for (const [dx, dz] of DIRS) {
+            const nk = key(ix + dx, iz + dz);
+            const b = cells.get(nk);
+            if (!b) continue;
+            // Forward: from height `cur.y`, which surface do we arrive on?
+            // Backward: we are asking which surfaces could have arrived HERE,
+            // so every level of the neighbour that could step onto cur.y.
+            // Backward means "which surfaces could have STEPPED ONTO cur?", and
+            // that is the landing rule run in reverse — not merely "is cur
+            // within a step of l". The loose version let the walk climb onto
+            // ceiling tops and wall caps, which is a different set of surfaces
+            // entirely, and the two walks came back disjoint.
+            const targets = forward
+              ? [landing(b, cur.y)]
+              : b.levels.filter((l) => landing(a, l) === cur.y);
+            for (const ty of targets) {
+              if (ty === null || ty === undefined) continue;
+              const nkey = nodeKey(nk, ty);
+              if (seen.has(nkey)) continue;
+              const from = forward
+                ? { x: a.x, z: a.z, py: cur.y }
+                : { x: b.x, z: b.z, py: ty };
+              if (blocked(from, forward ? dx : -dx, forward ? dz : -dz)) continue;
+              seen.add(nkey);
+              queue.push({ k: nk, y: ty });
+            }
+          }
+        }
+        return seen;
+      };
+
+      const wp = window.__VESSEL_WAYPOINTS;
+      const startAt = (p) => {
+        const k = nearestCell(p);
+        if (!k) return null;
+        const col = cells.get(k);
+        return { k, y: landing(col, p.y) ?? col.py };
+      };
+      const startFwd = startAt(wp.embodiment);
+      const startBack = startAt(wp.pagodaFloor);
+      const reachable = walk([startFwd], true);
+      const canExit = walk([startBack], false);
+      const diag8 = {
+        startFwd: startFwd && nodeKey(startFwd.k, startFwd.y),
+        startBack: startBack && nodeKey(startBack.k, startBack.y),
+        fwdHasBackStart: startBack ? reachable.has(nodeKey(startBack.k, startBack.y)) : null,
+        backHasFwdStart: startFwd ? canExit.has(nodeKey(startFwd.k, startFwd.y)) : null,
+        overlap: [...reachable].filter((n) => canExit.has(n)).length,
+        // Where the forward walk ran out. When the two walks come back
+        // disjoint the useful question is not "how many" but "how far" — the
+        // frontier names the segment of level that stopped it.
+        frontier: (() => {
+          let lo = Infinity;
+          let hi = -Infinity;
+          let at = null;
+          for (const node of reachable) {
+            const c = cells.get(node.split('@')[0]);
+            if (!c) continue;
+            if (c.z > hi) hi = c.z;
+            if (c.z < lo) { lo = c.z; at = node; }
+          }
+          if (!at) return { z: [lo, hi], count: reachable.size };
+          // The frontier cell's neighbours, on the same terms the walk saw
+          // them: what is there, and what you would land on stepping across.
+          const [fk, fy] = at.split('@');
+          const [fix, fiz] = fk.split(',').map(Number);
+          const nb = DIRS.map(([dx, dz]) => {
+            const c = cells.get(key(fix + dx, fiz + dz));
+            return {
+              d: `${dx},${dz}`,
+              levels: c ? c.levels.map((v) => +v.toFixed(2)) : null,
+              land: c ? landing(c, Number(fy)) : null,
+            };
+          });
+          const win = WINDOW
+            ? (() => {
+              const [x0, x1, z0, z1] = WINDOW;
+              const rows = [];
+              for (const [k, c] of cells) {
+                if (c.x < x0 || c.x > x1 || c.z < z0 || c.z > z1) continue;
+                rows.push(`x${c.x.toFixed(2)} z${c.z.toFixed(2)} y${c.levels.map((v) => v.toFixed(2)).join('/')}`
+                  + ` ${c.levels.some((l) => reachable.has(nodeKey(k, l))) ? 'R' : '-'}`);
+              }
+              return rows;
+            })()
+            : undefined;
+          return { z: [lo, hi], deepest: at, count: reachable.size, nb, win };
+        })(),
+      };
+
+      // ---- check 8: pits -------------------------------------------------
+      // Somewhere you can get into and not out of. With no fall backstop in
+      // this build that is a run-ending soft-lock, not an inconvenience.
+      // One pit, dissected: its column, its neighbours, and which nodes of each
+      // the two walks hold. Enough to see whether a cluster is a real dead end
+      // or a graph bug, without another round trip.
+      let pitProbe = null;
+      for (const node of reachable) {
+        if (canExit.has(node)) continue;
+        const [k0, y0] = node.split('@');
+        const [ix0, iz0] = k0.split(',').map(Number);
+        pitProbe = { node, levels: cells.get(k0).levels.map((v) => +v.toFixed(2)), nb: [] };
+        for (const [dx, dz] of DIRS) {
+          const nk = key(ix0 + dx, iz0 + dz);
+          const nb = cells.get(nk);
+          pitProbe.nb.push({
+            d: `${dx},${dz}`,
+            levels: nb ? nb.levels.map((v) => +v.toFixed(2)) : null,
+            land: nb ? landing(nb, Number(y0)) : null,
+            inFwd: nb ? nb.levels.filter((l) => reachable.has(nodeKey(nk, l))).map((v) => +v.toFixed(2)) : null,
+            inBack: nb ? nb.levels.filter((l) => canExit.has(nodeKey(nk, l))).map((v) => +v.toFixed(2)) : null,
+          });
+        }
+        break;
+      }
+
+      const pits = [];
+      for (const node of reachable) {
+        if (canExit.has(node)) continue;
+        const [k, ys] = node.split('@');
+        const c = cells.get(k);
+        pits.push({ zone: c.zone, x: +c.x.toFixed(1), z: +c.z.toFixed(1), y: +Number(ys).toFixed(2) });
+      }
+      // A handful of representatives per zone, spread through the cluster, for
+      // the simulation to try to walk out of.
+      // Interior cells only. A sample on the outer edge of a floor spends the
+      // whole test pressed into the wall beside it and reports 0m moved, which
+      // says nothing about whether the region is a trap.
+      const interior = (q) => {
+        const ix = toIx(q.x);
+        const iz = toIx(q.z);
+        return DIRS.every(([dx, dz]) => cells.has(key(ix + dx, iz + dz)));
+      };
+      const pitSamples = [];
+      for (const zone of new Set(pits.map((q) => q.zone))) {
+        const qs = pits.filter((q) => q.zone === zone && interior(q));
+        const pool = qs.length ? qs : pits.filter((q) => q.zone === zone);
+        for (const i of [0, Math.floor(pool.length / 2), pool.length - 1]) {
+          if (pool[i] && !pitSamples.some((s) => s.x === pool[i].x && s.z === pool[i].z)) {
+            pitSamples.push(pool[i]);
+          }
+        }
+      }
+
+      // ---- check 7: unguarded edges ------------------------------------
+      //
+      // The question checks 1-6 never asked. A column with no floor is SKIPPED
+      // by the sweep above (`if (py === null) continue`), so a hole is
+      // invisible to it by construction — which is how the chapter shipped with
+      // open strips down the side of three of its four routes while the audit
+      // reported clean.
+      //
+      // For every standable cell, every horizontal neighbour must be one of:
+      //   - standable itself, or
+      //   - blocked by a collider the capsule will hit first, or
+      //   - a drop that lands on something.
+      // Anything else is a place you walk off the world.
+      const inAnyZone = (x, zz) => zones.some(
+        (z) => x >= z.minX && x <= z.maxX && zz >= z.minZ && zz <= z.maxZ
+      );
+      const holes = [];
+      const drops = [];
+      for (const node of reachable) {
+        const [k, ys] = node.split('@');
+        const col = cells.get(k);
+        const cell = { x: col.x, z: col.z, py: Number(ys), zone: col.zone };
+        const [ix, iz] = k.split(',').map(Number);
+        for (const [dx, dz] of DIRS) {
+          const nb = cells.get(key(ix + dx, iz + dz));
+          // Somewhere to land within a step? Then this edge is floor, not a
+          // cliff, and the reachability walk has already crossed it.
+          if (nb && landing(nb, cell.py) !== null) continue;
+          const tx = cell.x + dx * GRID_STEP;
+          const tz = cell.z + dz * GRID_STEP;
+          if (!inAnyZone(tx, tz)) continue; // outside the swept footprint
+
+          // Something in the way? Same wall test the reachability walk uses, so
+          // "the player cannot go there" means one thing in this file.
+          if (blocked(cell, dx, dz)) continue;
+
+          // Nothing in the way, so the player goes over. Where do they land?
+          const below = ph.raycast(
+            { x: tx, y: cell.py + 0.5, z: tz }, DOWN, 200,
+            { solid: false, exclude: skip }
+          );
+          if (!below) {
+            holes.push({ zone: cell.zone, x: +tx.toFixed(1), z: +tz.toFixed(1), y: +cell.py.toFixed(2) });
+            continue;
+          }
+          const fall = cell.py - (cell.py + 0.5 - below.distance);
+          if (fall > DROP_WARN) {
+            drops.push({ zone: cell.zone, x: +tx.toFixed(1), z: +tz.toFixed(1), fall: +fall.toFixed(1) });
+          }
+        }
+      }
+
+      return {
+        sampled, mismatched, crouchOnly, perZone, noRoom, holes, drops, pits,
+        cellCount: cells.size, reachCount: reachable.size, exitCount: canExit.size, diag8, pitProbe,
+        pitSamples,
+      };
     }, {
       zones: GRID_ZONES, WALKABLE_NORMAL_Y, STAND_H: STAND_HEIGHT, CROUCH_H: CROUCH_HEIGHT,
+      GRID_STEP, CAP_R: CAPSULE_RADIUS, DROP_WARN, STEP: STEP_OFFSET,
+      WINDOW: process.env.COLLISION_WINDOW
+        ? process.env.COLLISION_WINDOW.split(',').map(Number) : null,
     });
 
     console.log('\n──── 5. grid sweep (standable ground, collider vs visual) ────');
@@ -575,11 +928,191 @@ async function main() {
       + (crouchZones.length ? ` in ${crouchZones.join(', ')}` : ''));
     console.log(`  · ${grid.noRoom} column(s) skipped: inside geometry, no room for a body`);
 
+    // ---- 7: unguarded edges ---------------------------------------------
+    console.log('\n──── 7. edges you can walk off ────');
+    console.log(
+      `  ${grid.reachCount} of ${grid.cellCount} standable cells are reachable from the`
+      + ` spawn, ${GRID_STEP}m lattice`
+    );
+    if (grid.holes.length) {
+      exitCode = 1;
+      // Cluster by zone so a 40-cell strip reads as one defect, not forty.
+      const byZone = new Map();
+      for (const h of grid.holes) {
+        if (!byZone.has(h.zone)) byZone.set(h.zone, []);
+        byZone.get(h.zone).push(h);
+      }
+      console.log(`  ✗ ${grid.holes.length} edge(s) with NOTHING beneath the far side:`);
+      for (const [zone, hs] of byZone) {
+        const xs = hs.map((h) => h.x);
+        const zs = hs.map((h) => h.z);
+        console.log(
+          `      ${zone.padEnd(12)} ${String(hs.length).padStart(4)} cells  `
+          + `x ${Math.min(...xs).toFixed(1)}…${Math.max(...xs).toFixed(1)}  `
+          + `z ${Math.min(...zs).toFixed(1)}…${Math.max(...zs).toFixed(1)}`
+        );
+        for (const h of hs.slice(0, 4)) console.log(`         e.g. x=${h.x} z=${h.z}, floor at y=${h.y}`);
+      }
+    } else {
+      console.log('  ✓ every edge is walled, or drops onto something');
+    }
+    if (grid.drops.length) {
+      const worst = grid.drops.reduce((a, b) => (a.fall > b.fall ? a : b));
+      console.log(
+        `  · ${grid.drops.length} unwalled drop(s) over ${DROP_WARN}m — deepest `
+        + `${worst.fall}m at ${worst.zone} x=${worst.x} z=${worst.z}`
+      );
+    }
+
+    // ---- 8: pits ---------------------------------------------------------
+    console.log('\n──── 8. places you get into and not out of ────');
+    console.log(`  ${grid.exitCount} cells can still reach the Pagoda Well floor`);
+    if (process.env.COLLISION_DEBUG) {
+      console.log('   ', JSON.stringify(grid.diag8));
+      console.log('   ', JSON.stringify(grid.pitProbe));
+    }
+    // Geometry proposes, simulation disposes.
+    //
+    // The reachability graph is a model: one surface per level, four
+    // directions, a step rule. Where two floors converge within a step of each
+    // other — which the Descent's main line and its lower route do at the
+    // bottom — the model can decide a route is sealed that the real controller
+    // walks straight out of. So every pit cluster gets driven, and only the
+    // ones the capsule genuinely cannot leave are defects. This is the same
+    // move check 6 makes for wedges, for the same reason.
+    const escapes = grid.pits.length ? await page.evaluate((samples) => {
+      const api = window.__VESSEL_API;
+      const engine = window.__VESSEL;
+      const input = api.engine.resolve('input');
+      const target = window.__VESSEL_WAYPOINTS.pagodaFloor;
+      input.enabled = false;
+      engine.setPaused(true);
+      const out = [];
+      for (const s of samples) {
+        api.player.respawn({ x: s.x, y: s.y + 0.4, z: s.z }, Math.PI);
+        for (let i = 0; i < 40; i++) engine.stepOnce();
+        const start = api.player.position.clone();
+        let last = start.clone();
+        let stalled = 0;
+        for (let i = 0; i < 900; i++) {
+          const p = api.player.position;
+          const dx = target.x - p.x;
+          const dz = target.z - p.z;
+          const flat = Math.hypot(dx, dz) || 1;
+          const yaw = api.cameraRig.yaw;
+          const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+          input.move.set((dx / flat) * -fz + (dz / flat) * fx, (dx / flat) * fx + (dz / flat) * fz);
+          input.moveMagnitude = 1;
+          // Crouch when stuck, stand when that did not help. The Descent's
+          // lower route runs under a 1.45m crawl, and a test that will not duck
+          // reports the far side of it as unreachable.
+          input.actions.crouch.pressed = stalled === 60 || stalled === 300;
+          engine.stepOnce();
+          input.actions.crouch.pressed = false;
+          stalled = p.distanceTo(last) < 0.004 ? stalled + 1 : 0;
+          last = p.clone();
+        }
+        if (api.player.state === 'crouch') {
+          for (let i = 0; i < 30; i++) {
+            input.actions.crouch.pressed = i === 0;
+            engine.stepOnce();
+          }
+          input.actions.crouch.pressed = false;
+        }
+        input.move.set(0, 0);
+        input.moveMagnitude = 0;
+        const end = api.player.position;
+        out.push({
+          ...s,
+          moved: +start.distanceTo(end).toFixed(1),
+          to: [+end.x.toFixed(1), +end.y.toFixed(1), +end.z.toFixed(1)],
+        });
+      }
+      engine.setPaused(false);
+      input.enabled = true;
+      return out;
+    }, grid.pitSamples) : [];
+
+    const trapped = escapes.filter((e) => e.moved < 6);
+    if (trapped.length) {
+      exitCode = 1;
+      const byZone = new Map();
+      for (const q of grid.pits) {
+        if (!byZone.has(q.zone)) byZone.set(q.zone, []);
+        byZone.get(q.zone).push(q);
+      }
+      console.log(`  ✗ ${trapped.length} of ${escapes.length} sampled pit(s) the capsule could not walk out of:`);
+      for (const t of trapped) console.log(`      ${t.zone.padEnd(12)} x=${t.x} z=${t.z} y=${t.y} — moved ${t.moved}m`);
+      for (const [zone, qs] of byZone) {
+        const xs = qs.map((q) => q.x);
+        const zs = qs.map((q) => q.z);
+        console.log(
+          `      ${zone.padEnd(12)} ${String(qs.length).padStart(4)} cells  `
+          + `x ${Math.min(...xs).toFixed(1)}…${Math.max(...xs).toFixed(1)}  `
+          + `z ${Math.min(...zs).toFixed(1)}…${Math.max(...zs).toFixed(1)}  `
+          + `y ${Math.min(...qs.map((q) => q.y)).toFixed(1)}…${Math.max(...qs.map((q) => q.y)).toFixed(1)}`
+        );
+        for (const q of qs.slice(0, 5)) console.log(`         e.g. x=${q.x} z=${q.z} y=${q.y}`);
+      }
+    } else if (grid.pits.length) {
+      console.log(
+        `  ✓ ${grid.pits.length} cell(s) the graph called dead ends, and the capsule`
+        + ` walked out of all ${escapes.length} sampled`
+      );
+      for (const e of escapes) console.log(`      ${e.zone.padEnd(12)} x=${e.x} z=${e.z} → ${e.to.join(',')} (${e.moved}m)`);
+    } else {
+      console.log('  ✓ everywhere you can reach, you can leave');
+    }
+
+    // ---- clearance probe, debug only -------------------------------------
+    // COLLISION_DEBUG=1 prints the floor, the ceiling over it and the gap
+    // between along the Descent's lower route. The crawl's whole design is that
+    // number staying between the crouched capsule and the standing one, and
+    // reasoning about it from the authoring coordinates has been wrong every
+    // time — two ramps and a slab all contribute a ceiling there.
+    if (process.env.COLLISION_DEBUG) {
+      const prof = await page.evaluate(({ STAND_H, CROUCH_H }) => {
+        const api = window.__VESSEL_API;
+        const ph = api.engine.resolve('physics');
+        const rows = [];
+        for (let z = 16; z >= 6; z -= 0.5) {
+          // The lower route's own centreline and expected height, so the ray
+          // starts UNDER the main line rather than inside its floor slab — the
+          // first version began at a fixed y−8 and spent the whole profile
+          // measuring the underside of the corridor above.
+          const seg2 = z <= 14.4;
+          const t = seg2 ? (14.4 - z) / 9.4 : (17.6 - z) / 3.2;
+          const x = seg2 ? -1.5 + t * 3.5 : -3.0 + t * 1.5;
+          const expect = seg2 ? -11.4 + t * -2.6 : -9.4 + t * -2.0;
+          // Every face in the column, not just the first, with its normal —
+          // "what is the floor here" has been the wrong question three times
+          // running in this corridor, because two ramps and a slab all pass
+          // through it at different heights.
+          const faces = [];
+          let cursor = expect + 5;
+          for (let i = 0; i < 20 && cursor > expect - 2; i++) {
+            const h = ph.raycast({ x, y: cursor, z }, { x: 0, y: -1, z: 0 },
+              cursor - (expect - 2), { solid: false });
+            if (!h) break;
+            const y = cursor - h.distance;
+            faces.push(`${y.toFixed(2)}/${h.normal.y.toFixed(2)}`);
+            cursor = y - 0.03;
+          }
+          rows.push({ z: +z.toFixed(1), x: +x.toFixed(2), expect: +expect.toFixed(2), faces });
+        }
+        return rows;
+      }, { STAND_H: STAND_HEIGHT, CROUCH_H: CROUCH_HEIGHT });
+      console.log('\n──── the lower route: every face in the column (y/normal.y) ────');
+      for (const r of prof) {
+        console.log(`  z=${String(r.z).padStart(5)} x=${String(r.x).padStart(5)} expect=${String(r.expect).padStart(7)}  ${r.faces.join('  ')}`);
+      }
+    }
+
     // ---- 6: wedges ------------------------------------------------------
     // A point where the capsule cannot move in ANY direction is a place the
     // player gets stuck, and it is the bug they will actually hit. Geometry
     // checks cannot find these; only running the controller can.
-    const wedges = await page.evaluate((pts) => {
+    const wedges = await page.evaluate(({ pts, STAND_H }) => {
       const api = window.__VESSEL_API;
       const engine = window.__VESSEL;
       const stuck = [];
@@ -594,6 +1127,13 @@ async function main() {
         for (let i = 0; i < 40; i++) engine.stepOnce(); // settle
         const start = api.player.position.clone();
         if (!api.player.grounded) continue; // never landed: check 1's problem
+        // Landed INSIDE something — the lattice is coarse enough to drop points
+        // in the middle of the candi, where the capsule settles on the plinth
+        // with the tower around it. "Cannot move" is true and means nothing.
+        const roof = api.engine.resolve('physics').raycast(
+          { x: start.x, y: start.y + 0.05, z: start.z }, { x: 0, y: 1, z: 0 }, STAND_H
+        );
+        if (roof) continue;
         let best = 0;
         for (let d = 0; d < 8; d++) {
           const a = (d / 8) * Math.PI * 2;
@@ -610,7 +1150,7 @@ async function main() {
       engine.setPaused(false);
       input.enabled = true;
       return stuck;
-    }, WEDGE_POINTS);
+    }, { pts: WEDGE_POINTS, STAND_H: STAND_HEIGHT });
 
     console.log('\n──── 6. wedges (places the capsule cannot leave) ────');
     console.log(`  ${WEDGE_POINTS.length} points probed in 8 directions each`);
